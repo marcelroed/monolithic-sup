@@ -17,8 +17,23 @@ import numpy as np
 from max.driver import CPU, Accelerator, Device, Tensor, accelerator_count
 from max.dtype import DType
 from max.engine import InferenceSession
-from max.graph import DeviceRef, Graph, TensorType, ops
+from max.graph import DeviceRef, Graph, TensorType, ops, BufferType, BufferValue
+from max import nn
 from numpy.typing import NDArray
+import jax
+import jax.numpy as jnp
+import torch
+
+from dataclasses import dataclass
+
+@dataclass
+class Linear:
+    weight: torch.Tensor
+    bias: torch.Tensor
+
+    def __call__(self, x):
+        pass
+
 
 
 def matrix_multiplication(
@@ -51,6 +66,11 @@ def matrix_multiplication(
                 shape=b_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
+            # BufferType(
+            #     dtype=dtype,
+            #     shape=b_tensor.shape,
+            #     device=DeviceRef.from_device(device),
+            # )
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
