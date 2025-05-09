@@ -25,13 +25,16 @@ class MinimalModel:
     @staticmethod
     def construct():
         weights = {
-            'linear': jax.random.normal(jax.random.PRNGKey(0), (4, 8)),
+            'linear1': jax.random.normal(jax.random.PRNGKey(0), (4, 8)),
+            'linear2': jax.random.normal(jax.random.PRNGKey(1), (8, 8)),
         }
         return weights
     
     @staticmethod
     def forward(weights, x):
-        x = jnp.dot(x, weights['linear'])
+        x = jnp.dot(x, weights['linear1'])
+        x = jax.nn.relu(x)
+        x = jnp.dot(x, weights['linear2'])
         return x
 
     @staticmethod
@@ -63,8 +66,8 @@ if __name__ == "__main__":
 
     loss_and_grad = jax.value_and_grad(MinimalModel.loss)
 
-    x = jax.random.normal(jax.random.PRNGKey(0), (4,))
-    y = jax.random.normal(jax.random.PRNGKey(1), (8,))
+    x = jax.random.normal(jax.random.PRNGKey(3), (4,))
+    y = jax.random.normal(jax.random.PRNGKey(4), (8,))
 
     model_jaxpr = jax.make_jaxpr(MinimalModel.single_update)(weights, x, y)
     print(model_jaxpr)
