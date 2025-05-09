@@ -49,8 +49,8 @@ fn cpu_reference[
     weight: LayoutTensor[float_dtype, weight_layout, MutableAnyOrigin],
     out: LayoutTensor[float_dtype, out_layout, MutableAnyOrigin],
 ):
-    for row in range(a.dim(0)):
-        for col in range(a.dim(1)):
+    for row in range(a.dim[0]()):
+        for col in range(a.dim[1]()):
             out[row] += a[row, col] * weight[row, col]
 
 def main():
