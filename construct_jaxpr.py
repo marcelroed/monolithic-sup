@@ -19,6 +19,8 @@ def attn_simple(x):
     return attn(x, x, x)
 
 
+LR = 0.01
+
 class MinimalModel:
     @staticmethod
     def construct():
@@ -38,6 +40,12 @@ class MinimalModel:
         # output = jax.random.normal(jax.random.PRNGKey(0), (8,))
         prediction = MinimalModel.forward(weights, x)
         return jnp.mean((prediction - y) ** 2)
+    
+    @staticmethod
+    def single_update(weights, x , y):
+        loss, grad = jax.value_and_grad(MinimalModel.loss)(weights, x, y)
+        weights = jax.tree.map(lambda w, g: w - LR * g, weights, grad)
+        return weights
 
 
 if __name__ == "__main__":
@@ -58,5 +66,11 @@ if __name__ == "__main__":
     x = jax.random.normal(jax.random.PRNGKey(0), (4,))
     y = jax.random.normal(jax.random.PRNGKey(1), (8,))
 
-    model_jaxpr = jax.make_jaxpr(loss_and_grad)(weights, x, y)
+    model_jaxpr = jax.make_jaxpr(MinimalModel.single_update)(weights, x, y)
     print(model_jaxpr)
+    jitted = jax.jit(MinimalModel.single_update)
+    traced = jitted.trace(weights, x, y)
+    lowered = traced.lower()
+    compiled = lowered.compile()
+    print(compiled.as_text())
+    breakpoint()
