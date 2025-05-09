@@ -29,4 +29,3 @@ if __name__ == "__main__":
     print("JAXPR representation of f:")
     print(f_jaxpr)
     print(f_derivative_jaxpr)
-    breakpoint()
