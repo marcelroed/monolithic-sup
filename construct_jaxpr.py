@@ -57,6 +57,12 @@ def mse_fun(x, y):
 def linear(w, x):
     return jnp.dot(w, x)
 
+def cross_entropy_loss(y_pred, y_true):
+    # y_pred: (batch_size, num_classes)
+    # y_true: (batch_size,) indices of the true classes
+    return -jnp.sum(y_true * jnp.log(y_pred + 1e-10)) / y_pred.shape[0]
+
+
 mse_value_and_grad = jax.value_and_grad(mse_fun)
 
 def show_function(fun, *args, save_as: str = None):
@@ -72,9 +78,6 @@ def show_function(fun, *args, save_as: str = None):
         for i, hlo_module in enumerate(compiled._executable.xla_executable.hlo_modules()):
             for j, computation in enumerate(hlo_module.computations()):
                 computation.render_html(f'{save_as}_{i}_{j}')
-
-
-
 
 
 if __name__ == "__main__":
