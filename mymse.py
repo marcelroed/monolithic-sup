@@ -236,6 +236,10 @@ def main():
         _, mojo_grad = model.execute(mojo_x, mojo_y)
 
         np_grad = mojo_grad.to_numpy()
+        wandb.log({"grad_norm": np.linalg.norm(np_grad)}, step=step)
+        np_ref_grad = 2 * (np_x - np_y) / (np_y.shape[0] * np_y.shape[1])
+        wandb.log({"ref_grad_norm": np.linalg.norm(np_ref_grad)}, step=step)
+
         if step == 0:
             np_moment = np_grad
         else:
