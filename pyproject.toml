@@ -42,6 +42,7 @@ test_attention_mojo = { cmd = "mojo test_flash_attention.mojo", depends-on = [
 ] }
 mse = { cmd = "python mse.py", depends-on = ["package"] }
 mymse = { cmd = "python mymse.py" }
+linearbwd = { cmd = "python linearbwd.py" }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]
