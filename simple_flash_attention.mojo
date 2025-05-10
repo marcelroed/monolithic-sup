@@ -6,6 +6,8 @@ from flash_attention import flash_attention
 from memory import UnsafePointer
 from random import rand, seed
 import math
+from sys import has_accelerator
+from max.driver import accelerator, cpu
 
 def build_ndbuffer[
     type: DType,
