@@ -425,7 +425,6 @@ struct _Matmul[
         accumulate: Bool = False,
     ):
         if M == 1:
-
             @parameter
             if transpose_b:
                 # Transpose is implemented for the K tensor and accumulation

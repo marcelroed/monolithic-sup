@@ -40,6 +40,9 @@ flash_attention = { cmd = "mojo flash_attention.mojo", depends-on = [
 test_attention_mojo = { cmd = "mojo test_flash_attention.mojo", depends-on = [
     "package",
 ] }
+simple_flash = { cmd = "mojo simple_flash_attention.mojo", depends-on = [
+    "package",
+] }
 mse = { cmd = "python mse.py", depends-on = ["package"] }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
