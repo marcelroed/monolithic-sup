@@ -105,16 +105,11 @@ def run_mymse(
     print("Executing...")
     loss, grad = model.execute(x_tensor, y_tensor)
 
-    # print(f"{loss=} {grad.shape=}")
-    # # Copy values back to the CPU to be read.
-    # assert isinstance(loss, Tensor)
-    # assert isinstance(grad, Tensor)
-    # return loss.to(CPU()), grad.to(CPU())
-
-    loss = loss.to_numpy()
-    grad = grad.to_numpy()
-
-    return loss, grad
+    print(f"{loss=} {grad.shape=}")
+    # Copy values back to the CPU to be read.
+    assert isinstance(loss, Tensor)
+    assert isinstance(grad, Tensor)
+    return loss.to(CPU()), grad.to(CPU())
 
 
 def numpy_mse(y_points, y_hat_points):
@@ -237,7 +232,7 @@ def main():
 
         np_grad = mojo_grad.to_numpy()
         wandb.log({"grad_norm": np.linalg.norm(np_grad)}, step=step)
-        np_ref_grad = 2 * (np_x - np_y) / (np_y.shape[0] * np_y.shape[1])
+        np_ref_grad = 2 * (np_x - np_y) / (BATCH_SIZE * K)
         wandb.log({"ref_grad_norm": np.linalg.norm(np_ref_grad)}, step=step)
 
         if step == 0:
