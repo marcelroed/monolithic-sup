@@ -1,3 +1,16 @@
+# ===----------------------------------------------------------------------=== #
+# Copyright (c) 2025, Modular Inc. All rights reserved.
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions:
+# https://llvm.org/LICENSE.txt
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ===----------------------------------------------------------------------=== #
+
 from collections import InlineArray
 from collections.string import StaticString
 from math import align_down, align_up, ceildiv, exp
@@ -14,13 +27,12 @@ from algorithm.reduction import (
 from buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
 from kv_cache.types import KVCacheT
-
 from sup.linalg.accumulate import _Accumulator
-# from sup.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
+from sup.linalg.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
 from sup.linalg.transpose import transpose_inplace
 from sup.linalg.utils import partition_work
-from sup.nn.mha_mask import MHAMask
 from memory import UnsafePointer, memset_zero, stack_allocation
+from sup.nn.mha_mask import MHAMask
 from runtime.asyncrt import parallelism_level
 from runtime.tracing import Trace, TraceLevel, trace_arg
 
@@ -425,6 +437,7 @@ struct _Matmul[
         accumulate: Bool = False,
     ):
         if M == 1:
+
             @parameter
             if transpose_b:
                 # Transpose is implemented for the K tensor and accumulation
@@ -444,6 +457,22 @@ struct _Matmul[
             Self._pack_buffer_transposed[input_b_fn, static_k](packed_ptr, N, K)
         else:
             Self._pack_buffer[input_b_fn](packed_ptr, N, K)
+
+        @parameter
+        if use_apple_accelerate_lib[type, type, type]():
+            return _cblas_f32(
+                M,
+                N,
+                K,
+                a_stride,
+                align_up(N, simd_width),
+                c_stride,
+                Float32(1.0),
+                Float32(1.0) if accumulate else Float32(0.0),
+                rebind[UnsafePointer[Float32]](c_ptr),
+                rebind[UnsafePointer[Float32]](a_ptr),
+                rebind[UnsafePointer[Float32]](packed_ptr),
+            )
 
         Self._matmul_packed(
             M,
@@ -1336,6 +1365,3 @@ fn flash_attention_kv_cache[
         mask_rank,
         output_shape,
     ](k, v, num_batches, num_heads, Int(max_seq_len), scale)
-
-def main():
-    print(has_avx512f())
