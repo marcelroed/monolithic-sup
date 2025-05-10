@@ -54,7 +54,7 @@ def mse(
 
     # Configure our simple one-operation graph.
     with Graph(
-        "matrix_multiplication_graph",
+        "mse_graph",
         input_types=[
             TensorType(
                 dtype,
@@ -147,52 +147,5 @@ if __name__ == "__main__":
         print(naive_result.to_numpy())
         print()
         exit()
-
-        coalescing_result = matrix_multiplication(
-            a, b, "coalescing", session, device
-        )
-        print("Coalescing matrix multiplication:")
-        print(coalescing_result.to_numpy())
-        print()
-
-        tiled_result = matrix_multiplication(a, b, "tiled", session, device)
-        print("Tiled matrix multiplication:")
-        print(tiled_result.to_numpy())
-        print()
-
-        tiled_register_result = matrix_multiplication(
-            a, b, "tiled_register", session, device
-        )
-        print("Shared memory and register tiling matrix multiplication:")
-        print(tiled_register_result.to_numpy())
-        print()
-
-        block_tiled_result = matrix_multiplication(
-            a, b, "block_tiled", session, device
-        )
-        print("2D block tiled matrix multiplication:")
-        print(block_tiled_result.to_numpy())
-        print()
-
-        block_tiled_vectorized_result = matrix_multiplication(
-            a, b, "block_tiled_vectorized", session, device
-        )
-        print("2D block tiled matrix multiplication (vectorized):")
-        print(block_tiled_vectorized_result.to_numpy())
-        print()
-
-        tensor_core_result = matrix_multiplication(
-            a, b, "tensor_core", session, device
-        )
-        print("Matrix multiplication using Tensor Cores:")
-        print(tensor_core_result.to_numpy())
-        print()
     else:
-        print(
-            "No MAX-compatible accelerator detected, only running a naive matrix multiplication:"
-        )
-
-        naive_result = matrix_multiplication(a, b, "naive", session, device)
-        print("Naive matrix multiplication:")
-        print(naive_result.to_numpy())
-        print()
+        print("ya dun goofed")
