@@ -22,7 +22,7 @@ from buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
 
 # TODO Refactor -- we should decide on and put them into a more common file
-from linalg.transpose import _fill_strides
+from sup.linalg.transpose import _fill_strides
 from memory import UnsafePointer, memcpy
 from register import register_internal
 

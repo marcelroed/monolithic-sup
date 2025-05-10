@@ -60,10 +60,10 @@ from layout.runtime_tuple import RuntimeTuple
 from layout.swizzle import Swizzle, make_ldmatrix_swizzle, make_swizzle
 from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_core import TensorCore, get_fragment_size, get_mma_shape
-from linalg._multistage_gemm_gpu import warp_split_k_reduction
-from linalg.matmul_gpu import _matmul_gpu
-from linalg.utils import GemmShape, apply_epilogue, elementwise_epilogue_type
-from linalg.utils_gpu import (
+from sup.linalg._multistage_gemm_gpu import warp_split_k_reduction
+from sup.linalg.matmul_gpu import _matmul_gpu
+from sup.linalg.utils import GemmShape, apply_epilogue, elementwise_epilogue_type
+from sup.linalg.utils_gpu import (
     MatmulConfig,
     MatmulKernels,
     block_swizzle,

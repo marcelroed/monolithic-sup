@@ -45,7 +45,7 @@ from layout.layout_tensor import (
 from layout.runtime_layout import RuntimeLayout
 from layout.swizzle import Swizzle
 from layout.tensor_core import TensorCore
-from linalg.utils import GemmShape
+from sup.linalg.utils import GemmShape
 from memory import UnsafePointer
 
 from utils import Index, IndexList, StaticTuple

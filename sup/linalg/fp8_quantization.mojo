@@ -24,8 +24,8 @@ from buffer import Dim, NDBuffer
 from buffer.dimlist import DimList
 from gpu.host import DeviceContext
 from gpu.host._compile import _get_gpu_target
-from linalg.matmul import matmul
-from linalg.utils_gpu import MatmulConfig
+from sup.linalg.matmul import matmul
+from sup.linalg.utils_gpu import MatmulConfig
 from math import ceildiv
 from memory import UnsafePointer, stack_allocation
 from utils.index import Index, IndexList

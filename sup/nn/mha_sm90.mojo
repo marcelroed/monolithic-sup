@@ -63,25 +63,25 @@ from layout.tensor_core_async import (
     tile_layout_mn_major,
 )
 from layout.tma_async import PipelineState, SharedMemBarrier
-from linalg._multistage_gemm_gpu import multistage_mma
+from sup.linalg._multistage_gemm_gpu import multistage_mma
 from memory import UnsafePointer, stack_allocation
-from nn.mha_mask import MHAMask, TileMaskStatus
-from nn.mha_operand import MHAOperand, NDBufferMHAOperand
-from nn.mha_score_mod import ScoreModTrait
-from nn.mha_utils import (
+from sup.nn.mha_mask import MHAMask, TileMaskStatus
+from sup.nn.mha_operand import MHAOperand, NDBufferMHAOperand
+from sup.nn.mha_score_mod import ScoreModTrait
+from sup.nn.mha_utils import (
     FlashAttentionAlgorithm,
     MHAConfig,
     _copy_frag_to_smem,
     _kernel_mask,
     get_start_and_end_for_partitions,
 )
-from nn.softmax import (
+from sup.nn.softmax import (
     _online_softmax_correction,
     _online_softmax_iter_for_mma_output_sm90,
     _rowmax_online_softmax,
     _rowsum,
 )
-from nn.mha_tile_scheduler import (
+from sup.nn.mha_tile_scheduler import (
     MHASchedule,
     MHASchedulerSynchronization,
     MHATileScheduler,

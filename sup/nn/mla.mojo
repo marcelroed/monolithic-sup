@@ -64,27 +64,27 @@ from layout.runtime_layout import RuntimeLayout, RuntimeTuple
 from layout.swizzle import Swizzle, make_swizzle
 from layout.tensor_builder import static
 from layout.tensor_core import get_fragment_size, get_mma_shape
-from linalg._multistage_gemm_gpu import multistage_mma
-from linalg.transpose import transpose
+from sup.linalg._multistage_gemm_gpu import multistage_mma
+from sup.linalg.transpose import transpose
 from memory import UnsafePointer, stack_allocation
 from memory.pointer import AddressSpace as _AddressSpace
 from memory.unsafe import bitcast
-from nn._ragged_utils import get_batch_from_row_offsets
-from nn.mha_mask import MHAMask, NullMask, TileMaskStatus
-from nn.mha_operand import (
+from sup.nn._ragged_utils import get_batch_from_row_offsets
+from sup.nn.mha_mask import MHAMask, NullMask, TileMaskStatus
+from sup.nn.mha_operand import (
     KVCacheMHAOperand,
     MHAOperand,
     NDBufferMHAOperand,
     RaggedMHAOperand,
 )
-from nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod, ScoreModTrait
-from nn.mha_utils import (
+from sup.nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod, ScoreModTrait
+from sup.nn.mha_utils import (
     FlashAttentionAlgorithm,
     MHAConfig,
     _copy_frag_to_smem,
     _kernel_mask,
 )
-from nn.softmax import _exp2_concrete
+from sup.nn.softmax import _exp2_concrete
 from runtime.tracing import Trace, TraceLevel, trace_arg
 
 from utils.index import Index, IndexList

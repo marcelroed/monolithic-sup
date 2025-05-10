@@ -73,28 +73,28 @@ from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_builder import static
 from layout.tensor_core import get_fragment_size, get_mma_shape
 from layout.tma_async import TensorMapSwizzle, create_tma_tile
-from linalg._multistage_gemm_gpu import multistage_mma
-from linalg.bmm import batched_matmul
-from linalg.matmul import matmul
-from linalg.transpose import transpose
+from sup.linalg._multistage_gemm_gpu import multistage_mma
+from sup.linalg.bmm import batched_matmul
+from sup.linalg.matmul import matmul
+from sup.linalg.transpose import transpose
 from memory import UnsafePointer, stack_allocation
 from memory.pointer import AddressSpace as _AddressSpace
 from memory.unsafe import bitcast
-from nn._amd_flash_attention_gpu import (
+from sup.nn._amd_flash_attention_gpu import (
     mha_decoding_single_batch as amd_mha_decoding_single_batch,
 )
-from nn._amd_flash_attention_gpu import mha_single_batch as amd_mha_single_batch
-from nn.mha_mask import MaterializedMask, MHAMask, NullMask, TileMaskStatus
-from nn.mha_operand import KVCacheMHAOperand, MHAOperand, NDBufferMHAOperand
-from nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod, ScoreModTrait
-from nn.mha_sm90 import (
+from sup.nn._amd_flash_attention_gpu import mha_single_batch as amd_mha_single_batch
+from sup.nn.mha_mask import MaterializedMask, MHAMask, NullMask, TileMaskStatus
+from sup.nn.mha_operand import KVCacheMHAOperand, MHAOperand, NDBufferMHAOperand
+from sup.nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod, ScoreModTrait
+from sup.nn.mha_sm90 import (
     mha_sm90_dispatch,
     DynamicInt,
     StaticInt,
     NoPartition,
     SplitKPartition,
 )
-from nn.mha_utils import (
+from sup.nn.mha_utils import (
     MHAConfig,
     _copy_frag_to_smem,
     _kernel_mask,

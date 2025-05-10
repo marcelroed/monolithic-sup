@@ -25,7 +25,7 @@ from sys.info import (
 
 from buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
-from linalg.utils import partition_work
+from sup.linalg.utils import partition_work
 
 from utils.index import Index, IndexList
 

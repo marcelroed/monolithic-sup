@@ -59,7 +59,7 @@ from layout.layout_tensor import (
     copy_sram_to_local,
 )
 from layout.math import outer_product_acc
-from linalg.matmul_tile_scheduler import MatmulSchedule
+from sup.linalg.matmul_tile_scheduler import MatmulSchedule
 from memory import UnsafePointer, bitcast, memset_zero, stack_allocation
 
 from utils import IndexList

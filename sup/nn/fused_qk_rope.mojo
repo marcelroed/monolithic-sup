@@ -23,7 +23,7 @@ from gpu.host import DeviceContext
 from gpu.host._compile import _get_gpu_target
 from gpu.host.info import is_cpu
 from kv_cache.types import KVCacheT, KVCollectionT
-from nn._ragged_utils import get_batch_from_row_offsets
+from sup.nn._ragged_utils import get_batch_from_row_offsets
 
 from utils import IndexList, StaticTuple
 

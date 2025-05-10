@@ -23,7 +23,7 @@ from gpu.host import DeviceBuffer, DeviceContext
 from gpu.host.info import is_cpu, is_gpu
 from memory import Span, UnsafePointer, memcpy
 from memory.memory import _malloc as _malloc_cpu
-from nn.concat import concat
+from sup.nn.concat import concat
 from register import *
 from runtime.asyncrt import DeviceContextPtr
 from weights_registry import WeightsRegistry

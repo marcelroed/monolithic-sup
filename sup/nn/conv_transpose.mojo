@@ -24,8 +24,8 @@ from algorithm import (
 )
 from buffer.buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
-from linalg.accumulate import _Accumulator
-from linalg.utils import partition_work
+from sup.linalg.accumulate import _Accumulator
+from sup.linalg.utils import partition_work
 from memory import UnsafePointer
 from register import register_internal
 from runtime.asyncrt import parallelism_level

@@ -57,8 +57,8 @@ from gpu._cudnn.infer import (
 )
 from gpu.host import DeviceContext
 from gpu.id import block_dim, block_idx, thread_idx
-from linalg.accumulate import _Accumulator
-from linalg.utils import partition_work
+from sup.linalg.accumulate import _Accumulator
+from sup.linalg.utils import partition_work
 from memory import UnsafePointer, stack_allocation
 from runtime.asyncrt import parallelism_level
 from runtime.tracing import Trace, TraceLevel, trace_arg

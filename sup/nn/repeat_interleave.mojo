@@ -14,7 +14,7 @@
 from algorithm.functional import elementwise
 from buffer import NDBuffer
 from collections import List
-from nn.gather_scatter import normalize_neg_index
+from sup.nn.gather_scatter import normalize_neg_index
 from sys import simdwidthof
 from utils import IndexList
 

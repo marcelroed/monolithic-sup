@@ -24,7 +24,7 @@ from gpu.host import DeviceBuffer, DeviceContext
 from gpu.host._compile import _get_gpu_target
 from gpu.host.info import is_cpu
 from memory import UnsafePointer, memcpy, memset_zero
-from nn.gather_scatter import normalize_neg_index
+from sup.nn.gather_scatter import normalize_neg_index
 from runtime.asyncrt import DeviceContextPtr, parallelism_level
 
 from utils import Index, IndexList, StaticTuple

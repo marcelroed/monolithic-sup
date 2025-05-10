@@ -79,14 +79,14 @@ from layout.tma_async import (
     TMATensorTile,
     create_tma_tile,
 )
-from linalg.matmul_sm90 import (
+from sup.linalg.matmul_sm90 import (
     _get_c_smem_layout,
     cluster_size,
     producer_main_loop,
     consumer_main_loop,
     warp_specialized_gemm_output,
 )
-from linalg.matmul_tile_scheduler import MatmulSchedule, TileScheduler
+from sup.linalg.matmul_tile_scheduler import MatmulSchedule, TileScheduler
 from memory import bitcast, stack_allocation
 from memory.pointer import _GPUAddressSpace
 from stdlib.bit import log2_floor

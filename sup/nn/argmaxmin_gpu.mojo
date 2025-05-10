@@ -16,8 +16,8 @@ from math import ceildiv
 from buffer import NDBuffer
 from buffer.dimlist import DimList
 from gpu.host import DeviceContext
-from nn.reshape import reshape
-from nn.topk import topk_gpu
+from sup.nn.reshape import reshape
+from sup.nn.topk import topk_gpu
 
 from utils import IndexList
 

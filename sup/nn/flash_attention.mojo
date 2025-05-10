@@ -27,12 +27,12 @@ from algorithm.reduction import (
 from buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
 from kv_cache.types import KVCacheT
-from linalg.accumulate import _Accumulator
-from linalg.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
-from linalg.transpose import transpose_inplace
-from linalg.utils import partition_work
+from sup.linalg.accumulate import _Accumulator
+from sup.linalg.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
+from sup.linalg.transpose import transpose_inplace
+from sup.linalg.utils import partition_work
 from memory import UnsafePointer, memset_zero, stack_allocation
-from nn.mha_mask import MHAMask
+from sup.nn.mha_mask import MHAMask
 from runtime.asyncrt import parallelism_level
 from runtime.tracing import Trace, TraceLevel, trace_arg
 

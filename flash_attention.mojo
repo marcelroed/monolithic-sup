@@ -15,11 +15,11 @@ from buffer import NDBuffer
 from buffer.dimlist import Dim, DimList
 from kv_cache.types import KVCacheT
 
-from soup.linalg.accumulate import _Accumulator
-# from soup.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
-from soup.linalg.transpose import transpose_inplace
-from soup.linalg.utils import partition_work
-from soup.nn.mha_mask import MHAMask
+from sup.linalg.accumulate import _Accumulator
+# from sup.apple_accelerate import _cblas_f32, use_apple_accelerate_lib
+from sup.linalg.transpose import transpose_inplace
+from sup.linalg.utils import partition_work
+from sup.nn.mha_mask import MHAMask
 from memory import UnsafePointer, memset_zero, stack_allocation
 from runtime.asyncrt import parallelism_level
 from runtime.tracing import Trace, TraceLevel, trace_arg

@@ -58,13 +58,13 @@ from layout.swizzle import Swizzle
 from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_builder import static
 from layout.tensor_core import TensorCore, get_mma_shape, num_matrix_reg
-from linalg.utils import GemmShape, apply_epilogue, elementwise_epilogue_type
-from linalg.utils_gpu import MatmulConfig
+from sup.linalg.utils import GemmShape, apply_epilogue, elementwise_epilogue_type
+from sup.linalg.utils_gpu import MatmulConfig
 from memory import UnsafePointer, stack_allocation
-from nn.mha_mask import MHAMask, NullMask, TileMaskStatus, CausalMask
-from nn.mha_operand import KVCacheMHAOperand, MHAOperand, NDBufferMHAOperand
-from nn.mha_utils import MHAConfig, _kernel_mask
-from nn.softmax import (
+from sup.nn.mha_mask import MHAMask, NullMask, TileMaskStatus, CausalMask
+from sup.nn.mha_operand import KVCacheMHAOperand, MHAOperand, NDBufferMHAOperand
+from sup.nn.mha_utils import MHAConfig, _kernel_mask
+from sup.nn.softmax import (
     _online_softmax_iter_for_mma_output,
     _online_softmax_iter_for_mma_output_split_warp_reduce,
     _softmax_gpu,

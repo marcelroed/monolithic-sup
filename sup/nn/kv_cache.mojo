@@ -28,17 +28,17 @@ from kv_cache.types import (
     PagedKVCache,
     PagedKVCacheCollection,
 )
-from linalg.matmul import elementwise_epilogue_type, matmul
+from sup.linalg.matmul import elementwise_epilogue_type, matmul
 from memory import UnsafePointer, memcpy
-from nn._ragged_utils import get_batch_from_row_offsets
-from nn.flash_attention import (
+from sup.nn._ragged_utils import get_batch_from_row_offsets
+from sup.nn.flash_attention import (
     flash_attention_kv_cache as flash_attention_kv_cache_cpu,
 )
-from nn.fused_qk_rope import fused_qk_rope
-from nn.mha import flash_attention as gpu_flash_attention
-from nn.mha_mask import CausalMask, MaterializedMask, NullMask
-from nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod
-from nn.normalization import _rms_norm_impl
+from sup.nn.fused_qk_rope import fused_qk_rope
+from sup.nn.mha import flash_attention as gpu_flash_attention
+from sup.nn.mha_mask import CausalMask, MaterializedMask, NullMask
+from sup.nn.mha_score_mod import AlibiScoreMod, IdentityScoreMod
+from sup.nn.normalization import _rms_norm_impl
 from register import register_internal
 from runtime.asyncrt import DeviceContextPtr
 from runtime.tracing import Trace, TraceLevel, trace_arg

@@ -61,47 +61,47 @@ from kv_cache.types import (
     KVCollectionT,
     PagedKVCacheCollection,
 )
-from linalg.bmm import batched_matmul, batched_matmul_shape
-from linalg.bmm import (
+from sup.linalg.bmm import batched_matmul, batched_matmul_shape
+from sup.linalg.bmm import (
     elementwise_epilogue_type as batched_matmul_elementwise_epilogue_type,
 )
-from linalg.dual_gemm import swishGLU
-from linalg.fp8_quantization import (
+from sup.linalg.dual_gemm import swishGLU
+from sup.linalg.fp8_quantization import (
     quantize_dynamic_scaled_fp8,
     quantize_static_scaled_fp8,
     matmul_dynamic_scaled_fp8,
 )
-from linalg.grouped_matmul import grouped_matmul
-from linalg.matmul import matmul
-from linalg.matrix_band_part import matrix_band_part
-from linalg.packing import _pack_b_ndbuffer_impl, pack_matmul_b_shape_func
-from linalg.utils import (
+from sup.linalg.grouped_matmul import grouped_matmul
+from sup.linalg.matmul import matmul
+from sup.linalg.matrix_band_part import matrix_band_part
+from sup.linalg.packing import _pack_b_ndbuffer_impl, pack_matmul_b_shape_func
+from sup.linalg.utils import (
     elementwise_epilogue_type as matmul_elementwise_epilogue_type,
 )
 from memory import AddressSpace, UnsafePointer
 from nn import arg_nonzero
-from nn._ragged_utils import merge_ragged_tensors
-from nn.activations import gelu, relu
-from nn.arange import arange, arange_shape
-from nn.argmaxmin import argmax, argmin
-from nn.argmaxmin_gpu import argmax_gpu, argmin_gpu
-from nn.argsort import argsort
-from nn.concat import _concat_cpu, concat, fused_concat
-from nn.conv import ConvInfoStatic, conv_gpu, conv_nhwc_direct, conv_shape
-from nn.conv import pack_filter as _pack_conv_filter
-from nn.conv import pack_filter_shape as pack_filter_shape_conv
-from nn.conv_transpose import conv_transpose_shape, conv_transposed
-from nn.conv_transpose import pack_filter as _pack_conv_transpose_filter
-from nn.conv_transpose import (
+from sup.nn._ragged_utils import merge_ragged_tensors
+from sup.nn.activations import gelu, relu
+from sup.nn.arange import arange, arange_shape
+from sup.nn.argmaxmin import argmax, argmin
+from sup.nn.argmaxmin_gpu import argmax_gpu, argmin_gpu
+from sup.nn.argsort import argsort
+from sup.nn.concat import _concat_cpu, concat, fused_concat
+from sup.nn.conv import ConvInfoStatic, conv_gpu, conv_nhwc_direct, conv_shape
+from sup.nn.conv import pack_filter as _pack_conv_filter
+from sup.nn.conv import pack_filter_shape as pack_filter_shape_conv
+from sup.nn.conv_transpose import conv_transpose_shape, conv_transposed
+from sup.nn.conv_transpose import pack_filter as _pack_conv_transpose_filter
+from sup.nn.conv_transpose import (
     pack_filter_shape as pack_filter_shape_conv_transpose,
 )
-from nn.fold import fold
-from nn.irfft import irfft
-from nn.cumsum import cumsum
-from nn.flash_attention import flash_attention as nn_flash_attention
-from nn.flash_attention import flash_attention_split_kv
-from nn.fused_qk_rope import fused_qk_rope_ragged
-from nn.gather_scatter import (
+from sup.nn.fold import fold
+from sup.nn.irfft import irfft
+from sup.nn.cumsum import cumsum
+from sup.nn.flash_attention import flash_attention as nn_flash_attention
+from sup.nn.flash_attention import flash_attention_split_kv
+from sup.nn.fused_qk_rope import fused_qk_rope_ragged
+from sup.nn.gather_scatter import (
     Axis,
     _unsafe_normalize_neg_index,
     gather,
@@ -116,13 +116,13 @@ from nn.gather_scatter import (
     scatter_nd_generator,
     scatter_nd_shape,
 )
-from nn.index_tensor import (
+from sup.nn.index_tensor import (
     advanced_indexing_getitem,
     advanced_indexing_getitem_shape,
     advanced_indexing_setitem_inplace,
     index_tensor,
 )
-from nn.kv_cache import (
+from sup.nn.kv_cache import (
     generic_flash_attention_kv_cache_causal_alibi_mask_continuous_batch,
     generic_flash_attention_kv_cache_causal_mask_continuous_batch,
     generic_flash_attention_kv_cache_continuous_batch,
@@ -137,7 +137,7 @@ from nn.kv_cache import (
     rms_norm_kv_cache_ragged_continuous_batching,
     rms_norm_kv_cache_ragged_paged,
 )
-from nn.kv_cache_ragged import (
+from sup.nn.kv_cache_ragged import (
     generic_cross_attention_kv_cache_null_mask_cont_batch_ragged,
     generic_flare_mla_decode_kv_cache_causal_mask_paged_ragged,
     generic_flare_mla_decompress_k_cache_ragged_paged,
@@ -161,33 +161,33 @@ from nn.kv_cache_ragged import (
     kv_matmul_ragged_continuous_batching,
     unfused_qkv_matmul_ragged_paged_gguf_quantized,
 )
-from nn.mha import flash_attention
-from nn.moe import moe_create_indices
-from nn.nms import non_max_suppression, non_max_suppression_shape_func
-from nn.normalization import layer_norm, rms_norm
-from nn.pad import pad_constant, pad_reflect, pad_repeat, pad_shape
-from nn.pad_gpu import pad_constant as pad_constant_gpu
-from nn.pool import avg_pool, max_pool, pool_shape, pool_shape_ceil
-from nn.rand_uniform import random_uniform
-from nn.repeat_interleave import repeat_interleave, repeat_interleave_shape
-from nn.reshape import reshape, reshape_shape
-from nn.resize import resize_linear, resize_nearest_neighbor
-from nn.roi_align import roi_align_nhwc
-from nn.slice import (
+from sup.nn.mha import flash_attention
+from sup.nn.moe import moe_create_indices
+from sup.nn.nms import non_max_suppression, non_max_suppression_shape_func
+from sup.nn.normalization import layer_norm, rms_norm
+from sup.nn.pad import pad_constant, pad_reflect, pad_repeat, pad_shape
+from sup.nn.pad_gpu import pad_constant as pad_constant_gpu
+from sup.nn.pool import avg_pool, max_pool, pool_shape, pool_shape_ceil
+from sup.nn.rand_uniform import random_uniform
+from sup.nn.repeat_interleave import repeat_interleave, repeat_interleave_shape
+from sup.nn.reshape import reshape, reshape_shape
+from sup.nn.resize import resize_linear, resize_nearest_neighbor
+from sup.nn.roi_align import roi_align_nhwc
+from sup.nn.slice import (
     copy_to_slice,
     slice_as_view,
     slice_dim_as_view,
     slice_shape,
 )
-from nn.softmax import logsoftmax, softmax
-from nn.split import split
-from nn.tile import tile, tile_shape
-from nn.topk import top_k
-from nn.topk import top_k_fused_sampling_cpu as _topk_fused_sampling_cpu
-from nn.topk import top_k_shape_impl
-from nn.topk import topk_fused_sampling_gpu as _topk_fused_sampling_gpu
-from nn.toppminp import min_p_sampling as min_p_sampling_cpu
-from nn.toppminp_gpu import min_p_sampling_gpu
+from sup.nn.softmax import logsoftmax, softmax
+from sup.nn.split import split
+from sup.nn.tile import tile, tile_shape
+from sup.nn.topk import top_k
+from sup.nn.topk import top_k_fused_sampling_cpu as _topk_fused_sampling_cpu
+from sup.nn.topk import top_k_shape_impl
+from sup.nn.topk import topk_fused_sampling_gpu as _topk_fused_sampling_gpu
+from sup.nn.toppminp import min_p_sampling as min_p_sampling_cpu
+from sup.nn.toppminp_gpu import min_p_sampling_gpu
 from quantization import (
     Q4sym,
     block_Q4_K,

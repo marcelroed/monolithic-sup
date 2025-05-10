@@ -27,9 +27,9 @@ from layout.runtime_tuple import RuntimeTuple
 import gpu.warp as warp
 from gpu import WARP_SIZE
 from memory import UnsafePointer
-from nn.mha_mask import MHAMask, TileMaskStatus
+from sup.nn.mha_mask import MHAMask, TileMaskStatus
 from utils.index import Index, IndexList
-from linalg.fast_div import FastDiv
+from sup.linalg.fast_div import FastDiv
 from os.atomic import Atomic
 from builtin.device_passable import DevicePassable
 from tensor_internal import ManagedTensorSlice
