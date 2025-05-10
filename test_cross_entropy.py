@@ -101,7 +101,7 @@ if __name__ == "__main__":
 
     print(device)
 
-    B, D = 1024, 1024
+    B, D = 1000, 1000
     np.random.seed(0)
 
     logits_np = np.ones(D, dtype=np.float32).reshape(1, D)
