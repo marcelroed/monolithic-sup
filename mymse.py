@@ -24,8 +24,10 @@ import jax
 import jax.numpy as jnp
 import torch
 import random
+import wandb
 
 from dataclasses import dataclass
+
 
 @dataclass
 class Linear:
@@ -34,7 +36,6 @@ class Linear:
 
     def __call__(self, x):
         pass
-
 
 
 def run_mymse(
@@ -103,19 +104,26 @@ def run_mymse(
     print("Executing...")
     loss, grad = model.execute(x_tensor, y_tensor)
 
-    print(f"{loss=} {grad.shape=}")
-    # Copy values back to the CPU to be read.
-    assert isinstance(loss, Tensor)
-    assert isinstance(grad, Tensor)
-    return loss.to(CPU()), grad.to(CPU())
+    # print(f"{loss=} {grad.shape=}")
+    # # Copy values back to the CPU to be read.
+    # assert isinstance(loss, Tensor)
+    # assert isinstance(grad, Tensor)
+    # return loss.to(CPU()), grad.to(CPU())
+
+    loss = loss.to_numpy()
+    grad = grad.to_numpy()
+
+    return loss, grad
+
 
 def numpy_mse(y_points, y_hat_points):
     loss = (y_points - y_hat_points) ** 2
-    grad = - 2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
+    grad = -2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
     return loss, grad
     # return (x_points - y_points) ** 2
 
-if __name__ == "__main__":
+
+def main_old():
     seed = 13
     random.seed(seed)
     np.random.seed(seed)
@@ -154,3 +162,82 @@ if __name__ == "__main__":
     print(grad.to_numpy())
     print(grad.shape)
     print()
+
+
+def main():
+    seed = 13
+    random.seed(seed)
+    np.random.seed(seed)
+    BATCH_SIZE = 16
+    K = 64
+    np_y = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
+    np_x = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
+
+    device = CPU() if accelerator_count() == 0 else Accelerator()
+    print(f"{device=}")
+
+    session = InferenceSession(devices=[device])
+
+    mojo_kernels = Path(__file__).parent / "operations"
+
+    dtype = DType.float32
+    with Graph(
+        "mymse_graph",
+        input_types=[
+            TensorType(
+                dtype,
+                shape=(BATCH_SIZE, K),
+                device=DeviceRef.from_device(device),
+            ),
+            TensorType(
+                dtype,
+                shape=(BATCH_SIZE, K),
+                device=DeviceRef.from_device(device),
+            ),
+        ],
+        custom_extensions=[mojo_kernels],
+    ) as graph:
+        x_value, y_value = graph.inputs
+        res = ops.custom(
+            name="mymse",
+            values=[x_value, y_value],
+            out_types=[
+                TensorType(
+                    dtype=x_value.tensor.dtype,
+                    shape=[1, 1],
+                    device=DeviceRef.from_device(device),
+                ),
+                TensorType(
+                    dtype=x_value.tensor.dtype,
+                    shape=[x_value.tensor.shape[0], y_value.tensor.shape[1]],
+                    device=DeviceRef.from_device(device),
+                ),
+            ],
+            parameters={"algorithm": "naive"},
+        )
+        graph.output(*res)
+
+    print("Compiling...")
+    model = session.load(graph)
+
+    step = 0
+    LR = 0.1
+    wandb.init(project="mojo")
+    while True:
+        np_loss = ((np_y - np_x) ** 2).mean()
+        print(f"{step=} \t{np_loss=}")
+        wandb.log({"train_loss": np_loss}, step=step)
+
+        print("Executing...")
+        mojo_x = Tensor.from_numpy(np_x).to(device)
+        mojo_y = Tensor.from_numpy(np_y).to(device)
+        _, mojo_grad = model.execute(mojo_x, mojo_y)
+
+        np_grad = mojo_grad.to_numpy()
+
+        np_x = np_x - LR * np_grad
+        step += 1
+
+
+if __name__ == "__main__":
+    main()

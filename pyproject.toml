@@ -11,6 +11,7 @@ dependencies = [
     "transformers>=4.51.3,<5",
     "protobuf>=6.30.2,<7",
     "grpcio>=1.71.0,<2",
+    "wandb",
 ]
 
 [build-system]
