@@ -124,7 +124,6 @@ def flash_fwd_kernel(
 
 @torch.compile(fullgraph=True)
 def flash_bwd_kernel(dO, L, Q, K, V, O, S, scale, is_causal):
-    """Compiled inner loop for flash attention backward pass."""
     D = (dO * O).sum(dim=-1)
     S_scores = Q @ K.transpose(-2, -1) * scale
 
