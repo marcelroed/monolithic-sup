@@ -110,8 +110,8 @@ def run_mymse(
     return loss.to(CPU()), grad.to(CPU())
 
 def numpy_mse(y_points, y_hat_points):
-    loss = np.mean((y_points - y_hat_points) ** 2)
-    grad = - 2 * np.mean((y_points - y_hat_points), axis=0) / (y_points.shape[0] * y_points.shape[1])
+    loss = (y_points - y_hat_points) ** 2
+    grad = - 2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
     return loss, grad
     # return (x_points - y_points) ** 2
 
