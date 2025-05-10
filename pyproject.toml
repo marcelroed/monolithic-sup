@@ -30,3 +30,4 @@ benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]
 max = "*"
+ipython = ">=9.2.0,<10"

@@ -75,68 +75,53 @@ fn cross_entropy_kernel_gpu[
     dtype: DType,
     a_layout:  Layout,        # logits  [B, D]
     b_layout:  Layout,        # labels  [B, D]  (one‑hot rows)
-    loss_layout: Layout,      # scalar  []
+    loss_layout: Layout,      # per instance  [B]
     grad_layout: Layout,      # grad    [B, D]
     max_warps_per_block: Int = 8,
 ](
     logits: LayoutTensor[dtype, a_layout, MutableAnyOrigin],
-    labels: LayoutTensor[dtype, b_layout, MutableAnyOrigin],
+    labels: LayoutTensor[DType.int32, b_layout, MutableAnyOrigin],
     out_loss: LayoutTensor[dtype, loss_layout, MutableAnyOrigin],
     out_grad: LayoutTensor[dtype, grad_layout, MutableAnyOrigin],
 ):
-
     # Shapes
     var B = logits.dim[0]()
     var D = logits.dim[1]()
-    var inv_B = (1.0 / B).cast[dtype]()
-
-    # Row / column this thread is responsible for
-    var row = block_dim.x * block_idx.x + thread_idx.x
-    var col = block_dim.y * block_idx.y + thread_idx.y
-    if row >= B or col >= D:
+    var row = block_dim.y * block_idx.y + thread_idx.y
+    if row >= B:
         return
+    var lane = lane_id()
 
-    # ---------------------------------------------------------------------
-    # 1) Row‑wise max for numerical stability
-    # ---------------------------------------------------------------------
-    # Gather max over the row with a warp‑wide reduction
-    var local_max = logits[row, col]
-    for j in range(col, D, block_dim.y):
-        if logits[row, j] > local_max:
-            local_max = logits[row, j]
+    var m_i = logits[row, lane]  # max of current tile
+    var m_new = logits[row, lane]  # max of current tile
+    var l_i = exp(m_i - m_i)  # running scaled sum
 
-    var row_max = warp.max(local_max)
+    var count = 0
+    for col in range(lane+WARP_SIZE, D, WARP_SIZE):
+        var x = logits[row, col]
 
-    barrier()  # synchronise before re‑using registers
+        if x > m_i:
+            m_new = x
 
-    # ---------------------------------------------------------------------
-    # 2) Row‑wise exponentials and soft‑max denominator
-    # ---------------------------------------------------------------------
-    var local_sum = exp(logits[row, col] - row_max)
-    for j in range(col+1, D, block_dim.y):
-        local_sum += exp(logits[row, j] - row_max)
-    var row_sum = warp.sum(local_sum)     # warp‑reduce intrinsic :contentReference[oaicite:3]{index=3}
-    var inv_row_sum = 1.0 / row_sum
+        # update the running scaled sum  (log‑sum‑exp recurrence)
+        var scaled_l = exp(m_i - m_new) * l_i
+        var add_l    = exp(x - m_new)
 
-    barrier()
+        l_i = scaled_l + add_l
+        m_i = m_new
+        count += 1
 
-    # ---------------------------------------------------------------------
-    # 3) Compute probabilities, gradient and loss term
-    # ---------------------------------------------------------------------
-    var prob = exp(logits[row, col] - row_max) * inv_row_sum
-    var grad_val = prob - labels[row, col]             # ∂L/∂logits = p − y
-    out_grad[row, col] = grad_val * inv_B              # mean over batch
+    var lane_lse = log(l_i) + m_i
+    var warp_max = warp.lane_group_max_and_broadcast[num_lanes=WARP_SIZE](lane_lse)
+    var lane_l_i = exp(lane_lse - warp_max)
+    var total_l_i = warp.lane_group_sum_and_broadcast[num_lanes=WARP_SIZE](lane_l_i)
+    var lse = log(total_l_i) + warp_max
 
-    var loss_elem = -labels[row, col] * log(prob)
-    # Warp reduction to obtain per‑row loss contribution
-    var row_loss = warp.sum(loss_elem) * inv_B
+    out_loss[row] = lse - logits[row, Int(labels[row])]
 
-    # ---------------------------------------------------------------------
-    # 4) Block‑level reduction to scalar and atomic add
-    # ---------------------------------------------------------------------
-    #var block_loss = block_reduce[dtype, max_warps_per_block](row_loss)
-    #if thread_idx.x == 0 and thread_idx.y == 0:
-    #    atomic_add(out_loss.ptr, block_loss)       # global atomic add
+    #if lane == 0:
+    #    print("row ", row, " ", lse_sum)
+
 
 
 @compiler.register("cross_entropy")
@@ -152,10 +137,10 @@ struct CrossEntropy[algorithm: StaticString]:
         # The kind of device this will be run on: "cpu" or "gpu"
         target: StaticString,
     ](
-        out_loss: OutputTensor[rank=2],
+        out_loss: OutputTensor[rank=1],
         out_grad: OutputTensor[type=out_loss.type, rank=2],
         logits: InputTensor[type=out_loss.type, rank=2],
-        labels: InputTensor[rank=1],
+        labels: InputTensor[type=DType.int32, rank=1],
         ctx: DeviceContextPtr,
     ) raises:
         # At graph compilation time, we will know what device we are compiling
@@ -195,7 +180,8 @@ struct CrossEntropy[algorithm: StaticString]:
 
             # Launch the kernel
             alias blockX = 32
-            alias blockY = 32
+            alias blockY = 8
+            alias rows_per_block = blockY
 
             gpu_ctx.enqueue_function[
                 cross_entropy_kernel_gpu[
@@ -211,8 +197,8 @@ struct CrossEntropy[algorithm: StaticString]:
                 out_loss_layout,
                 out_grad_layout,
                 grid_dim=(
-                    ceildiv(B, blockX),
-                    ceildiv(D, blockY),
+                    1,
+                    ceildiv(B, rows_per_block),
                 ),
                 block_dim=(blockX, blockY),
             )
