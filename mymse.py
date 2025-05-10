@@ -76,7 +76,7 @@ def run_mymse(
         # produces a result, with the specific algorithm that is used chosen
         # via compile-time parameterization.
         res = ops.custom(
-            name="mmymse",
+            name="mymse",
             values=[x_value, y_value],
             out_types=[
                 TensorType(

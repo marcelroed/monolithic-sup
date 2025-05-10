@@ -72,7 +72,7 @@ fn my_mse_kern[
     # out_grad[row, col] = dst_reg
 
 
-@compiler.register("mmymse")
+@compiler.register("mymse")
 struct MyMse[algorithm: StaticString]:
     """
     The central custom operation that dispatches to multiple different
