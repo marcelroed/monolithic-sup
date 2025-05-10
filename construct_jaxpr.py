@@ -51,7 +51,38 @@ class MinimalModel:
         return weights
 
 
+def mse_fun(x, y):
+    return jnp.mean((x - y) ** 2)
+
+def linear(w, x):
+    return jnp.dot(w, x)
+
+mse_value_and_grad = jax.value_and_grad(mse_fun)
+
+def show_function(fun, *args, save_as: str = None):
+    jitted = jax.jit(fun)
+    traced = jitted.trace(*args)
+    lowered = traced.lower()
+    print("Lowered HLO:")
+    print(lowered.as_text())
+    compiled = lowered.compile()
+    print("Compiled HLO:")
+    print(compiled.as_text())
+    if save_as:
+        for i, hlo_module in enumerate(compiled._executable.xla_executable.hlo_modules()):
+            for j, computation in enumerate(hlo_module.computations()):
+                computation.render_html(f'{save_as}_{i}_{j}')
+
+
+
+
+
 if __name__ == "__main__":
+    x = jax.random.normal(jax.random.PRNGKey(3), (4,))
+    y = jax.random.normal(jax.random.PRNGKey(4), (8,))
+    z = jax.random.normal(jax.random.PRNGKey(5), (8,))
+
+    ## ATTN
     # inp = jnp.ones((1, 4, 8))
     # out, f_derivative = jax.vjp(attn_simple, inp)
 
@@ -62,18 +93,22 @@ if __name__ == "__main__":
     # print(f_jaxpr)
     # print(f_derivative_jaxpr)
 
+    ## Actual model
     weights = MinimalModel.construct()
 
     loss_and_grad = jax.value_and_grad(MinimalModel.loss)
 
-    x = jax.random.normal(jax.random.PRNGKey(3), (4,))
-    y = jax.random.normal(jax.random.PRNGKey(4), (8,))
+    # ONLY MSE
+    # show_function(mse_value_and_grad, y, z, save_as='mse_value_and_grad')
 
-    model_jaxpr = jax.make_jaxpr(MinimalModel.single_update)(weights, x, y)
-    print(model_jaxpr)
-    jitted = jax.jit(MinimalModel.single_update)
-    traced = jitted.trace(weights, x, y)
-    lowered = traced.lower()
-    compiled = lowered.compile()
-    print(compiled.as_text())
-    breakpoint()
+    out, linear_vjp = jax.vjp(linear, weights['linear1'], y)
+    show_function(linear_vjp, x, save_as='linear_vjp')
+
+    # model_jaxpr = jax.make_jaxpr(MinimalModel.single_update)(weights, x, y)
+    # print(model_jaxpr)
+    # jitted = jax.jit(MinimalModel.single_update)
+    # traced = jitted.trace(weights, x, y)
+    # lowered = traced.lower()
+    # compiled = lowered.compile()
+    # print(compiled.as_text())
+    # breakpoint()

@@ -20,11 +20,12 @@ channels = [
     "https://conda.modular.com/max",
     "https://repo.prefix.dev/modular-community",
 ]
-platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
+platforms = ["linux-64"]
 
 [tool.pixi.tasks]
 package = "mojo package operations/ -o operations.mojopkg"
 matrix_multiplication = { cmd = "python matrix_multiplication.py", depends-on = ["package"] }
+mse = { cmd = "python mse.py", depends-on = ["package"] }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]
