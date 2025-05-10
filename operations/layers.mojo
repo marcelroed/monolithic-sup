@@ -124,8 +124,8 @@ struct MSEFwdBwd:
     fn execute(
         out_loss: OutputTensor[rank=2],
         out_grad: OutputTensor[rank=2],
-        a: InputTensor[type = out_loss.type, rank = out_grad.rank],
-        b: InputTensor[type = out_loss.type, rank = out_grad.rank],
+        a: InputTensor[type=out_loss.type, rank=2],
+        b: InputTensor[type=out_loss.type, rank=2],
         # the context is needed for some GPU calls
         ctx: DeviceContextPtr,
     ) raises:
