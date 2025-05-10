@@ -1339,4 +1339,4 @@ fn flash_attention_kv_cache[
     ](k, v, num_batches, num_heads, Int(max_seq_len), scale)
 
 def main():
-    pass
+    print(has_avx512f())

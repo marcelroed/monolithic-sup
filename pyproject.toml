@@ -37,6 +37,9 @@ matrix_multiplication = { cmd = "python matrix_multiplication.py", depends-on = 
 flash_attention = { cmd = "mojo flash_attention.mojo", depends-on = [
     "package",
 ] }
+attention = { cmd = "python attention.py", depends-on = [
+    "package",
+] }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]
