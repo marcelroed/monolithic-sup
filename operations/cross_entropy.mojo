@@ -8,10 +8,10 @@ from layout.layout_tensor import (
     copy_dram_to_sram,
     copy_dram_to_sram_async,
 )
-from layout.math import outer_product_acc
+from layout.math import outer_product_acc, max
 from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_core import TensorCore
-from math import ceildiv
+from math import ceildiv, exp, log 
 from memory import UnsafePointer
 from runtime.asyncrt import DeviceContextPtr
 from sys.info import simdwidthof
@@ -70,103 +70,70 @@ fn block_reduce[
     return m2_broadcast[0]
 
 
-fn mse_kernel_gpu[
+@always_inline
+fn cross_entropy_kernel_gpu[
     dtype: DType,
-    a_layout: Layout,
-    b_layout: Layout,
-    out_loss_layout: Layout,
-    out_grad_layout: Layout,
+    a_layout:  Layout,        # logits  [B, D]
+    b_layout:  Layout,        # labels  [B, D]  (one‑hot rows)
+    loss_layout: Layout,      # scalar  []
+    grad_layout: Layout,      # grad    [B, D]
+    max_warps_per_block: Int = 8,
 ](
-    a: LayoutTensor[dtype, a_layout, MutableAnyOrigin],
-    b: LayoutTensor[dtype, b_layout, MutableAnyOrigin],
-    out_loss: LayoutTensor[dtype, out_loss_layout, MutableAnyOrigin],
-    out_grad: LayoutTensor[dtype, out_grad_layout, MutableAnyOrigin],
+    logits: LayoutTensor[dtype, a_layout, MutableAnyOrigin],
+    labels: LayoutTensor[dtype, b_layout, MutableAnyOrigin],
+    out_loss: LayoutTensor[dtype, loss_layout, MutableAnyOrigin],
+    out_grad: LayoutTensor[dtype, grad_layout, MutableAnyOrigin],
 ):
 
-    var B = a.dim[0]()
-    var D = a.dim[1]()
+    # Shapes
+    var B = logits.dim[0]()
+    var D = logits.dim[1]()
+    var inv_B = (1.0 / B).cast[dtype]()
 
-    var mean_factor = 1.0 / (B * D)
-
-
-    # Calculate the column and row indices for each thread.
+    # Row / column this thread is responsible for
     var row = block_dim.x * block_idx.x + thread_idx.x
     var col = block_dim.y * block_idx.y + thread_idx.y
+    if row >= B or col >= D:
+        return
 
-    # var dst_reg: out_grad.element_type = 0.0
+    # ---------------------------------------------------------------------
+    # 1) Row‑wise max for numerical stability
+    # ---------------------------------------------------------------------
+    # Gather max over the row with a warp‑wide reduction
+    var local_max = -1.0e30
+    for j in range(col, D, block_dim.y):
+        local_max = max(local_max, logits[row, j])
+    var row_max = warp.max(local_max)     # warp‑sum intrinsic :contentReference[oaicite:2]{index=2}
 
-    # Iterate over the K dimension to compute the dot product.
-    if row < B and col < D:
-        var out_grad_reg = a[row, col] - b[row, col]
-        # Grad is scaled by 2 / (B * D)
-        out_grad[row, col] = ((2.0 * mean_factor).cast[dtype]()) * out_grad_reg
+    barrier()  # synchronise before re‑using registers
 
-        # Square and then reduce the result to get the loss.
-        out_grad_reg = out_grad_reg * out_grad_reg
+    # ---------------------------------------------------------------------
+    # 2) Row‑wise exponentials and soft‑max denominator
+    # ---------------------------------------------------------------------
+    var local_sum = 0.0
+    for j in range(col, D, block_dim.y):
+        local_sum += exp(logits[row, j] - row_max)
+    var row_sum = warp.sum(local_sum)     # warp‑reduce intrinsic :contentReference[oaicite:3]{index=3}
+    var inv_row_sum = 1.0 / row_sum
 
-        # Start reducing
-        out_grad
+    barrier()
+
+    # ---------------------------------------------------------------------
+    # 3) Compute probabilities, gradient and loss term
+    # ---------------------------------------------------------------------
+    var prob = exp(logits[row, col] - row_max) * inv_row_sum
+    var grad_val = prob - labels[row, col]             # ∂L/∂logits = p − y
+    out_grad[row, col] = grad_val * inv_B              # mean over batch
+
+    var loss_elem = -labels[row, col] * log(prob)
+    # Warp reduction to obtain per‑row loss contribution
+    var row_loss = warp.sum(loss_elem) * inv_B
+
+    # ---------------------------------------------------------------------
+    # 4) Block‑level reduction to scalar and atomic add
+    # ---------------------------------------------------------------------
+    var block_loss = block_reduce[dtype, max_warps_per_block](row_loss)
+    #if thread_idx.x == 0 and thread_idx.y == 0:
+    #    atomic_add(out_loss.ptr, block_loss)       # global atomic add
 
 
-    # Write the final accumulated result to the output matrix.
-    # c[row, col] = dst_reg
-
-
-@compiler.register("mse_fwdbwd")
-struct MSEFwdBwd:
-    """
-    The central custom operation that dispatches to multiple different
-    matrix multiplication implementations, depending on target hardware and
-    selected algorithm.
-    """
-
-    @staticmethod
-    fn execute(
-        out_loss: OutputTensor[rank=0],
-        out_grad: OutputTensor[rank=2],
-        a: InputTensor[type = out_loss.type, rank = out_grad.rank],
-        b: InputTensor[type = out_loss.type, rank = out_grad.rank],
-        # the context is needed for some GPU calls
-        ctx: DeviceContextPtr,
-    ) raises:
-        # At graph compilation time, we will know what device we are compiling
-        # this operation for, so we can specialize it for the target hardware.
-        a_layout = a.to_layout_tensor()
-        b_layout = b.to_layout_tensor()
-        out_loss_layout = out_loss.to_layout_tensor()
-        out_grad_layout = out_grad.to_layout_tensor()
-
-        B = a_layout.shape[0]()
-        D = a_layout.shape[1]()
-
-        gpu_ctx = ctx.get_device_context()
-
-        # Zero out the memory in the outbound tensor.
-        # gpu_ctx.enqueue_memset(
-        #     DeviceBuffer[out_loss.type](
-        #         gpu_ctx,
-        #         rebind[UnsafePointer[Scalar[out.type]]](out_layout.ptr),
-        #         M * N,
-        #         owning=False,
-        #     ),
-        #     0,
-        # )
-
-        # alias BM = 32
-        # alias BN = 32
-        # gpu_ctx.enqueue_function[
-        #     naive_matrix_multiplication[
-        #         out.type,
-        #         a_layout.layout,
-        #         b_layout.layout,
-        #         out_layout.layout,
-        #         BM,
-        #         BN,
-        #     ]
-        # ](
-        #     a_layout,
-        #     b_layout,
-        #     out_layout,
-        #     grid_dim=(ceildiv(N, BN), ceildiv(M, BM)),
-        #     block_dim=(BN, BM),
-        # )
