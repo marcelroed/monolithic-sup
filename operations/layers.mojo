@@ -154,19 +154,19 @@ struct MSEFwdBwd:
 
         # alias BM = 32
         # alias BN = 32
-        gpu_ctx.enqueue_function[
-            naive_matrix_multiplication[
-                out.type,
-                a_layout.layout,
-                b_layout.layout,
-                out_layout.layout,
-                BM,
-                BN,
-            ]
-        ](
-            a_layout,
-            b_layout,
-            out_layout,
-            grid_dim=(ceildiv(N, BN), ceildiv(M, BM)),
-            block_dim=(BN, BM),
-        )
+        # gpu_ctx.enqueue_function[
+        #     naive_matrix_multiplication[
+        #         out.type,
+        #         a_layout.layout,
+        #         b_layout.layout,
+        #         out_layout.layout,
+        #         BM,
+        #         BN,
+        #     ]
+        # ](
+        #     a_layout,
+        #     b_layout,
+        #     out_layout,
+        #     grid_dim=(ceildiv(N, BN), ceildiv(M, BM)),
+        #     block_dim=(BN, BM),
+        # )
