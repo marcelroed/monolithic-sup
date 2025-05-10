@@ -107,25 +107,25 @@ struct MyMse[algorithm: StaticString]:
         gpu_ctx = ctx.get_device_context()
 
         # Zero out the memory in the outbound tensor.
-        gpu_ctx.enqueue_memset(
-            DeviceBuffer[out_loss.type](
-                gpu_ctx,
-                rebind[UnsafePointer[Scalar[out_loss.type]]](out_loss_layout.ptr),
-                1,
-                owning=False,
-            ),
-            0,
-        )
+        # gpu_ctx.enqueue_memset(
+        #     DeviceBuffer[out_loss.type](
+        #         gpu_ctx,
+        #         rebind[UnsafePointer[Scalar[out_loss.type]]](out_loss_layout.ptr),
+        #         1,
+        #         owning=False,
+        #     ),
+        #     0,
+        # )
 
-        gpu_ctx.enqueue_memset(
-            DeviceBuffer[out_grad.type](
-                gpu_ctx,
-                rebind[UnsafePointer[Scalar[out_grad.type]]](out_grad_layout.ptr),
-                M * N,
-                owning=False,
-            ),
-            0,
-        )
+        # gpu_ctx.enqueue_memset(
+        #     DeviceBuffer[out_grad.type](
+        #         gpu_ctx,
+        #         rebind[UnsafePointer[Scalar[out_grad.type]]](out_grad_layout.ptr),
+        #         M * N,
+        #         owning=False,
+        #     ),
+        #     0,
+        # )
             # We support several compile-time variants for the matrix
             # multiplication calculation:
             # - "naive": A naive matrix multiplication using LayoutTensors.
