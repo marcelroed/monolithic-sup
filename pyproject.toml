@@ -47,6 +47,8 @@ simple_flash_gpu = { cmd = "mojo simple_flash_attention_gpu.mojo", depends-on = 
     "package",
 ] }
 mse = { cmd = "python mse.py", depends-on = ["package"] }
+mymse = { cmd = "python mymse.py" }
+linearbwd = { cmd = "python linearbwd.py" }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]

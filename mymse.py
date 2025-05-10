@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 import jax
 import jax.numpy as jnp
 import torch
+import random
 
 from dataclasses import dataclass
 
@@ -36,9 +37,9 @@ class Linear:
 
 
 
-def mse(
-    x: NDArray[np.float32],
-    target: NDArray[np.float32],
+def run_mymse(
+    x_points: NDArray[np.float32],
+    y_points: NDArray[np.float32],
     algorithm: str,
     session: InferenceSession,
     device: Device,
@@ -47,14 +48,14 @@ def mse(
 
     # Create driver tensors from the input arrays, and move them to the
     # accelerator.
-    x_tensor = Tensor.from_numpy(x).to(device)
-    target_tensor = Tensor.from_numpy(target).to(device)
+    x_tensor = Tensor.from_numpy(x_points).to(device)
+    y_tensor = Tensor.from_numpy(y_points).to(device)
 
     mojo_kernels = Path(__file__).parent / "operations"
 
     # Configure our simple one-operation graph.
     with Graph(
-        "mse_graph",
+        "mymse_graph",
         input_types=[
             TensorType(
                 dtype,
@@ -63,20 +64,20 @@ def mse(
             ),
             TensorType(
                 dtype,
-                shape=target_tensor.shape,
+                shape=y_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
         # Take in the two inputs to the graph.
-        x_value, target_value = graph.inputs
+        x_value, y_value = graph.inputs
         # The matrix multiplication custom operation takes in two matrices and
         # produces a result, with the specific algorithm that is used chosen
         # via compile-time parameterization.
-        output = ops.custom(
-            name="mse_fwdbwd",
-            values=[x_value, target_value],
+        res = ops.custom(
+            name="mymse",
+            values=[x_value, y_value],
             out_types=[
                 TensorType(
                     dtype=x_value.tensor.dtype,
@@ -85,13 +86,14 @@ def mse(
                 ),
                 TensorType(
                     dtype=x_value.tensor.dtype,
-                    shape=[x_value.tensor.shape[0], x_value.tensor.shape[1]],
+                    shape=[x_value.tensor.shape[0], y_value.tensor.shape[1]],
                     device=DeviceRef.from_device(device),
-                )
+                ),
             ],
-            # parameters={"algorithm": algorithm},
-        )[1].tensor
-        graph.output(output)
+            parameters={"algorithm": algorithm},
+        )
+        graph.output(*res)
+        # graph.output(res[1])
 
     # Compile the graph.
     print("Compiling...")
@@ -99,22 +101,26 @@ def mse(
 
     # Perform the calculation on the target device.
     print("Executing...")
-    result = model.execute(x_tensor, target_tensor)[0]
+    loss, grad = model.execute(x_tensor, y_tensor)
 
+    print(f"{loss=} {grad.shape=}")
     # Copy values back to the CPU to be read.
-    assert isinstance(result, Tensor)
-    print(result)
-    print("SUCCEEDED!")
-    return result.to(CPU())
+    assert isinstance(loss, Tensor)
+    assert isinstance(grad, Tensor)
+    return loss.to(CPU()), grad.to(CPU())
 
+def numpy_mse(y_points, y_hat_points):
+    loss = (y_points - y_hat_points) ** 2
+    grad = - 2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
+    return loss, grad
+    # return (x_points - y_points) ** 2
 
 if __name__ == "__main__":
-    M = 256
-    K = 256
-    N = 256
-
-    batch_size = 16
-    d_model = 16
+    seed = 13
+    random.seed(seed)
+    np.random.seed(seed)
+    BATCH_SIZE = 16
+    K = 64
 
     # Place the graph on a GPU, if available. Fall back to CPU if not.
     device = CPU() if accelerator_count() == 0 else Accelerator()
@@ -124,28 +130,27 @@ if __name__ == "__main__":
     # Set up an inference session for running the graph.
     session = InferenceSession(devices=[device])
 
-    # Generate points on a plane in 16d space
-    x_points = np.random.uniform(size=(batch_size, d_model)).astype(np.float32)
-    target_points = np.random.uniform(size=(batch_size, d_model)).astype(np.float32)
-    
-    # a = np.random.uniform(size=(M, K)).astype(np.float32)
-    # b = np.random.uniform(size=(K, N)).astype(np.float32)
+    # Fill the input matrices with random values.
+    y = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
+    y_hat = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
 
-    # First, perform the matrix multiplication in NumPy.
-    print(f'{x_points=}\n')
+    print(f"{y.shape=} {y_hat.shape=}")
 
-    print(f"{target_points=}\n")
+    print(numpy_mse(y, y_hat))
+    print([x.shape for x in numpy_mse(y, y_hat)])
+
+    # # First, perform the matrix multiplication in NumPy.
 
     # print("Expected result:")
     # print(a @ b)
     # print()
 
-    if accelerator_count() > 0:
-        # Then, test the various versions of matrix multiplication operations.
-        naive_result = mse(x_points, target_points, "naive", session, device)
-        print("MSE RSEULT")
-        print(naive_result.to_numpy())
-        print()
-        exit()
-    else:
-        print("ya dun goofed")
+    # assert accelerator_count() > 0
+    #     # Then, test the various versions of matrix multiplication operations.
+    loss, grad = run_mymse(y, y_hat, "naive", session, device)
+    print("Naive matrix multiplication:")
+    print(loss.to_numpy())
+    print(loss.shape)
+    print(grad.to_numpy())
+    print(grad.shape)
+    print()
