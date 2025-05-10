@@ -8,10 +8,10 @@ from layout.layout_tensor import (
     copy_dram_to_sram,
     copy_dram_to_sram_async,
 )
-from layout.math import outer_product_acc, max
+from layout.math import outer_product_acc
 from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_core import TensorCore
-from math import ceildiv, exp, log 
+from math import ceildiv, exp, log
 from memory import UnsafePointer
 from runtime.asyncrt import DeviceContextPtr
 from sys.info import simdwidthof
@@ -100,18 +100,20 @@ fn cross_entropy_kernel_gpu[
     # 1) Row‑wise max for numerical stability
     # ---------------------------------------------------------------------
     # Gather max over the row with a warp‑wide reduction
-    var local_max = -1.0e30
+    var local_max = logits[row, col]
     for j in range(col, D, block_dim.y):
-        local_max = max(local_max, logits[row, j])
-    var row_max = warp.max(local_max)     # warp‑sum intrinsic :contentReference[oaicite:2]{index=2}
+        if logits[row, j] > local_max:
+            local_max = logits[row, j]
+
+    var row_max = warp.max(local_max)
 
     barrier()  # synchronise before re‑using registers
 
     # ---------------------------------------------------------------------
     # 2) Row‑wise exponentials and soft‑max denominator
     # ---------------------------------------------------------------------
-    var local_sum = 0.0
-    for j in range(col, D, block_dim.y):
+    var local_sum = exp(logits[row, col] - row_max)
+    for j in range(col+1, D, block_dim.y):
         local_sum += exp(logits[row, j] - row_max)
     var row_sum = warp.sum(local_sum)     # warp‑reduce intrinsic :contentReference[oaicite:3]{index=3}
     var inv_row_sum = 1.0 / row_sum
@@ -132,8 +134,86 @@ fn cross_entropy_kernel_gpu[
     # ---------------------------------------------------------------------
     # 4) Block‑level reduction to scalar and atomic add
     # ---------------------------------------------------------------------
-    var block_loss = block_reduce[dtype, max_warps_per_block](row_loss)
+    #var block_loss = block_reduce[dtype, max_warps_per_block](row_loss)
     #if thread_idx.x == 0 and thread_idx.y == 0:
     #    atomic_add(out_loss.ptr, block_loss)       # global atomic add
 
+
+@compiler.register("cross_entropy")
+struct CrossEntropy[algorithm: StaticString]:
+    """
+    The central custom operation that dispatches to multiple different
+    matrix multiplication implementations, depending on target hardware and
+    selected algorithm.
+    """
+
+    @staticmethod
+    fn execute[
+        # The kind of device this will be run on: "cpu" or "gpu"
+        target: StaticString,
+    ](
+        out_loss: OutputTensor[rank=2],
+        out_grad: OutputTensor[type=out_loss.type, rank=2],
+        logits: InputTensor[type=out_loss.type, rank=2],
+        labels: InputTensor[rank=1],
+        ctx: DeviceContextPtr,
+    ) raises:
+        # At graph compilation time, we will know what device we are compiling
+        # this operation for, so we can specialize it for the target hardware.
+        @parameter
+        if target == "gpu":
+            logits_layout = logits.to_layout_tensor()
+            labels_layout = labels.to_layout_tensor()
+            out_grad_layout = out_grad.to_layout_tensor()
+            out_loss_layout = out_loss.to_layout_tensor()
+
+
+            gpu_ctx = ctx.get_device_context()
+            B = logits_layout.dim[0]()
+            D = logits_layout.dim[1]()
+
+            # Zero out the memory in the outbound tensor.
+            gpu_ctx.enqueue_memset(
+                DeviceBuffer[out_grad.type](
+                    gpu_ctx,
+                    rebind[UnsafePointer[Scalar[out_grad.type]]](out_grad_layout.ptr),
+                    B*D,
+                    owning=False,
+                ),
+                0,
+            )
+
+            gpu_ctx.enqueue_memset(
+                DeviceBuffer[out_loss.type](
+                    gpu_ctx,
+                    rebind[UnsafePointer[Scalar[out_loss.type]]](out_loss_layout.ptr),
+                    1,
+                    owning=False,
+                ),
+                0,
+            )
+
+            # Launch the kernel
+            alias blockX = 32
+            alias blockY = 32
+
+            gpu_ctx.enqueue_function[
+                cross_entropy_kernel_gpu[
+                    out_loss.type,
+                    logits_layout.layout,
+                    labels_layout.layout,
+                    out_loss_layout.layout,
+                    out_grad_layout.layout,
+                ]
+            ](
+                logits_layout,
+                labels_layout,
+                out_loss_layout,
+                out_grad_layout,
+                grid_dim=(
+                    ceildiv(B, blockX),
+                    ceildiv(D, blockY),
+                ),
+                block_dim=(blockX, blockY),
+            )
 
