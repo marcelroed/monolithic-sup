@@ -36,9 +36,9 @@ class Linear:
 
 
 
-def matrix_multiplication(
-    a: NDArray[np.float32],
-    b: NDArray[np.float32],
+def mse(
+    x: NDArray[np.float32],
+    target: NDArray[np.float32],
     algorithm: str,
     session: InferenceSession,
     device: Device,
@@ -47,8 +47,8 @@ def matrix_multiplication(
 
     # Create driver tensors from the input arrays, and move them to the
     # accelerator.
-    a_tensor = Tensor.from_numpy(a).to(device)
-    b_tensor = Tensor.from_numpy(b).to(device)
+    x_tensor = Tensor.from_numpy(x).to(device)
+    target_tensor = Tensor.from_numpy(target).to(device)
 
     mojo_kernels = Path(__file__).parent / "operations"
 
@@ -58,34 +58,39 @@ def matrix_multiplication(
         input_types=[
             TensorType(
                 dtype,
-                shape=a_tensor.shape,
+                shape=x_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
             TensorType(
                 dtype,
-                shape=b_tensor.shape,
+                shape=target_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
         # Take in the two inputs to the graph.
-        a_value, b_value = graph.inputs
+        x_value, target_value = graph.inputs
         # The matrix multiplication custom operation takes in two matrices and
         # produces a result, with the specific algorithm that is used chosen
         # via compile-time parameterization.
         output = ops.custom(
-            name="matrix_multiplication",
-            values=[a_value, b_value],
+            name="mse_fwdbwd",
+            values=[x_value, target_value],
             out_types=[
                 TensorType(
-                    dtype=a_value.tensor.dtype,
-                    shape=[a_value.tensor.shape[0], b_value.tensor.shape[1]],
+                    dtype=x_value.tensor.dtype,
+                    shape=[1, 1],
+                    device=DeviceRef.from_device(device),
+                ),
+                TensorType(
+                    dtype=x_value.tensor.dtype,
+                    shape=[x_value.tensor.shape[0], x_value.tensor.shape[1]],
                     device=DeviceRef.from_device(device),
                 )
             ],
-            parameters={"algorithm": algorithm},
-        )[0].tensor
+            # parameters={"algorithm": algorithm},
+        )[1].tensor
         graph.output(output)
 
     # Compile the graph.
@@ -94,10 +99,12 @@ def matrix_multiplication(
 
     # Perform the calculation on the target device.
     print("Executing...")
-    result = model.execute(a_tensor, b_tensor)[0]
+    result = model.execute(x_tensor, target_tensor)[0]
 
     # Copy values back to the CPU to be read.
     assert isinstance(result, Tensor)
+    print(result)
+    print("SUCCEEDED!")
     return result.to(CPU())
 
 
@@ -118,8 +125,8 @@ if __name__ == "__main__":
     session = InferenceSession(devices=[device])
 
     # Generate points on a plane in 16d space
-    x_points = np.random.uniform(size=(batch_size, d_model), dtype=np.float32)
-    target_points = np.random.uniform(size=(batch_size, d_model), dtype=np.float32)
+    x_points = np.random.uniform(size=(batch_size, d_model)).astype(np.float32)
+    target_points = np.random.uniform(size=(batch_size, d_model)).astype(np.float32)
     
     # a = np.random.uniform(size=(M, K)).astype(np.float32)
     # b = np.random.uniform(size=(K, N)).astype(np.float32)
@@ -135,10 +142,11 @@ if __name__ == "__main__":
 
     if accelerator_count() > 0:
         # Then, test the various versions of matrix multiplication operations.
-        naive_result = matrix_multiplication(a, b, "naive", session, device)
-        print("Naive matrix multiplication:")
+        naive_result = mse(x_points, target_points, "naive", session, device)
+        print("MSE RSEULT")
         print(naive_result.to_numpy())
         print()
+        exit()
 
         coalescing_result = matrix_multiplication(
             a, b, "coalescing", session, device

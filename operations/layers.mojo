@@ -101,11 +101,11 @@ fn mse_kernel_gpu[
         # Grad is scaled by 2 / (B * D)
         out_grad[row, col] = ((2.0 * mean_factor).cast[dtype]()) * out_grad_reg
 
-        # Square and then reduce the result to get the loss.
-        out_grad_reg = out_grad_reg * out_grad_reg
+        # # Square and then reduce the result to get the loss.
+        # out_grad_reg = out_grad_reg * out_grad_reg
 
-        # Start reducing
-        out_grad
+        # # Start reducing
+        # out_grad
 
 
     # Write the final accumulated result to the output matrix.
@@ -122,7 +122,7 @@ struct MSEFwdBwd:
 
     @staticmethod
     fn execute(
-        out_loss: OutputTensor[rank=0],
+        out_loss: OutputTensor[rank=2],
         out_grad: OutputTensor[rank=2],
         a: InputTensor[type = out_loss.type, rank = out_grad.rank],
         b: InputTensor[type = out_loss.type, rank = out_grad.rank],
@@ -151,6 +151,34 @@ struct MSEFwdBwd:
         #     ),
         #     0,
         # )
+
+        gpu_ctx.enqueue_function[
+            mse_kernel_gpu[
+                out_loss.type,
+                a_layout.layout,
+                b_layout.layout,
+                out_loss_layout.layout,
+                out_grad_layout.layout,
+
+                # out_loss.type,
+                # a_layout.layout,
+                # b_layout.layout,
+                # out_loss_layout.layout,
+                # out_grad_layout.layout,
+                # out_loss: DType,
+                # a_layout: Layout,
+                # b_layout: Layout,
+                # out_loss_layout: Layout,
+                # out_grad_layout: Layout,
+            ]
+        ](
+            a_layout,
+            b_layout,
+            out_loss_layout,
+            out_grad_layout,
+            grid_dim=(ceildiv(B, 32), ceildiv(D, 32)),
+            block_dim=(32, 32),
+        )
 
         # alias BM = 32
         # alias BN = 32
