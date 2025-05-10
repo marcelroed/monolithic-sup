@@ -106,6 +106,9 @@ if __name__ == "__main__":
     K = 256
     N = 256
 
+    batch_size = 16
+    d_model = 16
+
     # Place the graph on a GPU, if available. Fall back to CPU if not.
     device = CPU() if accelerator_count() == 0 else Accelerator()
 
@@ -114,22 +117,21 @@ if __name__ == "__main__":
     # Set up an inference session for running the graph.
     session = InferenceSession(devices=[device])
 
-    # Fill the input matrices with random values.
-    a = np.random.uniform(size=(M, K)).astype(np.float32)
-    b = np.random.uniform(size=(K, N)).astype(np.float32)
+    # Generate points on a plane in 16d space
+    x_points = np.random.uniform(size=(batch_size, d_model), dtype=np.float32)
+    target_points = np.random.uniform(size=(batch_size, d_model), dtype=np.float32)
+    
+    # a = np.random.uniform(size=(M, K)).astype(np.float32)
+    # b = np.random.uniform(size=(K, N)).astype(np.float32)
 
     # First, perform the matrix multiplication in NumPy.
-    print("A:")
-    print(a)
-    print()
+    print(f'{x_points=}\n')
 
-    print("B:")
-    print(b)
-    print()
+    print(f"{target_points=}\n")
 
-    print("Expected result:")
-    print(a @ b)
-    print()
+    # print("Expected result:")
+    # print(a @ b)
+    # print()
 
     if accelerator_count() > 0:
         # Then, test the various versions of matrix multiplication operations.
