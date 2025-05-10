@@ -25,6 +25,7 @@ import jax.numpy as jnp
 import torch
 import random
 import wandb
+from tqdm import tqdm
 
 from dataclasses import dataclass
 
@@ -165,7 +166,7 @@ def main_old():
 
 
 def main():
-    seed = 13
+    seed = 42
     random.seed(seed)
     np.random.seed(seed)
     BATCH_SIZE = 16
@@ -222,21 +223,27 @@ def main():
 
     step = 0
     LR = 0.1
+    MU = 0.9
     wandb.init(project="mojo")
+    pbar = tqdm()
     while True:
         np_loss = ((np_y - np_x) ** 2).mean()
-        print(f"{step=} \t{np_loss=}")
+        pbar.set_postfix({"loss": np_loss})
         wandb.log({"train_loss": np_loss}, step=step)
 
-        print("Executing...")
         mojo_x = Tensor.from_numpy(np_x).to(device)
         mojo_y = Tensor.from_numpy(np_y).to(device)
         _, mojo_grad = model.execute(mojo_x, mojo_y)
 
         np_grad = mojo_grad.to_numpy()
+        if step == 0:
+            np_moment = np_grad
+        else:
+            np_moment = MU * np_moment + (1 - MU) * np_grad
 
-        np_x = np_x - LR * np_grad
+        np_x = np_x - LR * np_moment
         step += 1
+        pbar.update(1)
 
 
 if __name__ == "__main__":
