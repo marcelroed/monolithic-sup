@@ -150,5 +150,16 @@ if __name__ == "__main__":
         np.abs(mojo_grad.to_numpy() - torch_grad)
     ) / np.linalg.norm(torch_grad)
 
-    print(f"Loss rel‑err  : {loss_err:e}")
-    print(f"Grad rel‑err  : {grad_err:e}")
+
+    loss_max_abs_rel_err = np.max(
+        np.abs(mojo_loss.to_numpy() - torch_loss.cpu().detach().numpy())
+        / np.abs(torch_loss.cpu().detach().numpy())
+    )
+    grad_max_abs_rel_err = np.max(
+        np.abs(mojo_grad.to_numpy() - torch_grad) / np.abs(torch_grad)
+    )
+    print(f"Loss rel‑err l2: {loss_err:e}")
+    print(f"Grad rel‑err l2: {grad_err:e}")
+
+    print(f"Loss max abs rel‑err: {loss_max_abs_rel_err:e}")
+    print(f"Grad max abs rel‑err: {grad_max_abs_rel_err:e}")
