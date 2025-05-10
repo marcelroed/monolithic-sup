@@ -137,7 +137,7 @@ if __name__ == "__main__":
     # print("PyTorch loss:")
     # print(torch_loss.cpu().detach().numpy())
 
-    torch_loss.mean().backward()
+    torch_loss.sum().backward()
     torch_grad = torch_logits.grad.cpu().numpy()
 
     # print("Mojo loss:")
@@ -150,5 +150,5 @@ if __name__ == "__main__":
         np.abs(mojo_grad.to_numpy() - torch_grad)
     ) / np.linalg.norm(torch_grad)
 
-    print(f"Loss abs‑err  : {loss_err:e}")
+    print(f"Loss rel‑err  : {loss_err:e}")
     print(f"Grad rel‑err  : {grad_err:e}")

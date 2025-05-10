@@ -82,7 +82,7 @@ fn cross_entropy_kernel_gpu[
     logits: LayoutTensor[dtype, a_layout, MutableAnyOrigin],
     labels: LayoutTensor[DType.int32, b_layout, MutableAnyOrigin],
     out_loss: LayoutTensor[dtype, loss_layout, MutableAnyOrigin],
-    out_grad: LayoutTensor[dtype, grad_layout, MutableAnyOrigin],
+    dlogits: LayoutTensor[dtype, grad_layout, MutableAnyOrigin],
 ):
     # Shapes
     var B = logits.dim[0]()
@@ -119,6 +119,13 @@ fn cross_entropy_kernel_gpu[
 
     out_loss[row] = lse - logits[row, Int(labels[row])]
 
+    # Compute the gradient
+    for col in range(lane, D, WARP_SIZE):
+        var grad = exp(logits[row, col] - lse)
+        if col == Int(labels[row]):
+            grad -= 1
+        dlogits[row, col] = grad
+
     #if lane == 0:
     #    print("row ", row, " ", lse_sum)
 
@@ -138,7 +145,7 @@ struct CrossEntropy[algorithm: StaticString]:
         target: StaticString,
     ](
         out_loss: OutputTensor[rank=1],
-        out_grad: OutputTensor[type=out_loss.type, rank=2],
+        dlogits: OutputTensor[type=out_loss.type, rank=2],
         logits: InputTensor[type=out_loss.type, rank=2],
         labels: InputTensor[type=DType.int32, rank=1],
         ctx: DeviceContextPtr,
@@ -149,7 +156,7 @@ struct CrossEntropy[algorithm: StaticString]:
         if target == "gpu":
             logits_layout = logits.to_layout_tensor()
             labels_layout = labels.to_layout_tensor()
-            out_grad_layout = out_grad.to_layout_tensor()
+            out_grad_layout = dlogits.to_layout_tensor()
             out_loss_layout = out_loss.to_layout_tensor()
 
 
@@ -159,9 +166,9 @@ struct CrossEntropy[algorithm: StaticString]:
 
             # Zero out the memory in the outbound tensor.
             gpu_ctx.enqueue_memset(
-                DeviceBuffer[out_grad.type](
+                DeviceBuffer[dlogits.type](
                     gpu_ctx,
-                    rebind[UnsafePointer[Scalar[out_grad.type]]](out_grad_layout.ptr),
+                    rebind[UnsafePointer[Scalar[dlogits.type]]](out_grad_layout.ptr),
                     B*D,
                     owning=False,
                 ),
