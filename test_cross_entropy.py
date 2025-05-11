@@ -43,7 +43,7 @@ def cross_entropy_loss(
     # mojo_kernels = Path(__file__).parent / "operations"  # *.mojo lives here
     mojo_kernels = Path("operations")  # *.mojo lives here
 
-    B, C = logits.shape
+    B, V = logits.shape
     dtype = DType.float32
     # 2) Build a tiny graph that wraps the single custom op
     with Graph(
@@ -82,7 +82,7 @@ def cross_entropy_loss(
         graph.output(loss_val, grad_val)
 
     # 3) Compile & run
-    print("⇢ Compiling softmax‑xent graph …")
+    print("⇢ Compiling softmax-xent graph …")
     model = session.load(graph)
 
     print("⇢ Executing on device …")
