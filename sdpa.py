@@ -49,6 +49,9 @@ def attention_fwd(
     )
 
     scale = math.sqrt(1.0 / head_dim)
+    print(K)
+    print(ops.transpose(K, -2, -1))
+    print("fwd bwd")
     scores = Q @ ops.transpose(K, -2, -1)
     # Note, the graph compiler currently requires the order of operands
     # to be `scores * scale` in order to pattern match the fused attention
@@ -86,11 +89,26 @@ def attention_bwd(
     Q: TensorValue,
     K: TensorValue,
     V: TensorValue,
+    mask: TensorValue,
     head_dim: int
 ):
-    dV = ops.matmul(ops.transpose(P, -1 -2), dO)
+    dV = ops.matmul(ops.transpose(P, 2, 3), dO)
     dP = ops.matmul(dO, ops.transpose(V, -1, -2))
-    dS = dP # TODO: DO THIS
+    
+    dS = ops.add(
+        ops.mul(ops.broadcast_to(-ops.sum(ops.mul(dP, P), axis=-1), P.shape), P),
+        ops.mul(dP, P)
+    )
+     
+    # if is_causal:
+    #     dS = dS.masked_fill(mask.unsqueeze(0).expand_as(dS), 0)
+    dS = ops.select(mask, dS, 0)
+
+    # P_m_1_n = ops.reshape(P, (-1, ))
+    # dS = dP # TODO: DO THIS
+
+    # TODO: Do mask
+
     dQ = ops.matmul(dS, K) * (1.0 / math.sqrt(head_dim))
     dK = ops.matmul(ops.transpose(dS, -1, -2), Q) * (1.0 / math.sqrt(head_dim))
     return dQ, dK, dV
@@ -114,6 +132,7 @@ def run_sdpa(
     q: NDArray[np.float32],
     k: NDArray[np.float32],
     v: NDArray[np.float32],
+    dO: NDArray[np.float32],
     mask: NDArray[np.float32],
     session: InferenceSession,
     device: Device,
@@ -125,6 +144,7 @@ def run_sdpa(
     k_tensor = Tensor.from_numpy(k).to(device)
     v_tensor = Tensor.from_numpy(v).to(device)
     mask_tensor = Tensor.from_numpy(mask).to(device)
+    dO_tensor = Tensor.from_numpy(dO).to(device)
 
     mojo_kernels = Path(__file__).parent / "operations"
 
@@ -153,18 +173,25 @@ def run_sdpa(
                 shape=mask.shape,
                 device=DeviceRef.from_device(device),
             ),
+            TensorType(
+                dtype,
+                shape=dO_tensor.shape,
+                device=DeviceRef.from_device(device),
+            ),
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
-        q, k, v, mask = graph.inputs
+        q, k, v, mask, dO = graph.inputs
 
         o, p = attention_fwd(graph, q, k, v, mask, n_heads, head_dim)
+
+        dQ, dK, dV = attention_bwd(p, dO, q, k, v, mask, head_dim)
 
         graph.output(o, p)
 
     model = session.load(graph)
 
-    o, p = model.execute(q_tensor, k_tensor, v_tensor, mask_tensor)
+    o, p = model.execute(q_tensor, k_tensor, v_tensor, mask_tensor, dO_tensor)
 
     return o.to(CPU()), p.to(CPU())
 
@@ -190,8 +217,9 @@ def main():
     k = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
     v = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
     mask = np.tril(np.ones((batch_size, n_head, seq_len, seq_len))).astype(np.float32)
+    dO = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
 
-    o, p = run_sdpa(q, k, v, mask, session, device, n_head, head_dim)
+    o, p = run_sdpa(q, k, v, dO, mask, session, device, n_head, head_dim)
     print(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy())
 
     print(o.to_numpy())
