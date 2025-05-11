@@ -86,16 +86,28 @@ def attention_bwd(
     Q: TensorValue,
     K: TensorValue,
     V: TensorValue,
+    head_dim: int
 ):
-    pass
+    dV = ops.matmul(ops.transpose(P, -1 -2), dO)
+    dP = ops.matmul(dO, ops.transpose(V, -1, -2))
+    dS = dP # TODO: DO THIS
+    dQ = ops.matmul(dS, K) * (1.0 / math.sqrt(head_dim))
+    dK = ops.matmul(ops.transpose(dS, -1, -2), Q) * (1.0 / math.sqrt(head_dim))
+    return dQ, dK, dV
 
-def sdpa_fwd(q, k, v, mask, d_k_inv, neg_inf):
-    s = ops.mul(ops.matmul(q, ops.transpose(k, -1, -2)), d_k_inv)
-    # TODO: mask
-    s = ops.select(mask, s, neg_inf)
-    p = ops.softmax(s)
-    o = ops.matmul(p, v)
-    return o, p
+    # D = einsum(O, dO, "... N_q_o d, ... N_q_do d -> ... N_q_o N_q_do").diagonal(dim1=1, dim2=2)
+    # dS = P * (dP - D.unsqueeze(-1))
+    # if is_causal:
+    #     dS = dS.masked_fill(mask.unsqueeze(0).expand_as(dS), 0)
+
+
+# def sdpa_fwd(q, k, v, mask, d_k_inv, neg_inf):
+#     s = ops.mul(ops.matmul(q, ops.transpose(k, -1, -2)), d_k_inv)
+#     # TODO: mask
+#     s = ops.select(mask, s, neg_inf)
+#     p = ops.softmax(s)
+#     o = ops.matmul(p, v)
+#     return o, p
 
 
 def run_sdpa(
@@ -181,6 +193,8 @@ def main():
 
     o, p = run_sdpa(q, k, v, mask, session, device, n_head, head_dim)
     print(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy())
+
+    print(o.to_numpy())
     # print(p.to_numpy())
 
     # # Fill the input matrices with random values.
