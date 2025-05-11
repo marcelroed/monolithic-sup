@@ -24,21 +24,21 @@ import jax
 import jax.numpy as jnp
 import torch
 import random
-from tqdm import trange
+from tqdm import trange, tqdm
+import wandb
 
 from dataclasses import dataclass
 
 
 def update_weight(w, dw, lr):
-    return ops.sub(
-        w, ops.mul(lr, dw)
-    )
+    return ops.sub(w, ops.mul(lr, dw))
 
 
 def relu_fwd(x, constant_zero):
     y = ops.relu(x)
     grad_mask = ops.greater_equal(x, constant_zero)
     return y, grad_mask
+
 
 def relu_bwd(dy, grad_mask, constant_zero):
     dx = ops.select(grad_mask, dy, constant_zero)
@@ -49,10 +49,11 @@ def linear_fwd(x, w):
     y = ops.matmul(x, ops.transpose(w, 0, 1))
     return y
 
+
 def linear_bwd(x, w, dy, lr):
     dw = ops.matmul(
-        ops.transpose(x, 0, 1),
-        dy,
+        ops.transpose(dy, 0, 1),
+        x,
     )
     dx = ops.matmul(
         dy,
@@ -61,6 +62,7 @@ def linear_bwd(x, w, dy, lr):
     w_new = update_weight(w, dw, lr)
 
     return dx, w_new
+
 
 def cross_entropy_fwdbwd(logits, target):
     loss_val, grad_val = ops.custom(
@@ -101,10 +103,15 @@ def train_loop(
     # x_activation_tensor = Tensor.from_numpy(y_points).to(device)
     # weight_tensor = Tensor.from_numpy(weight).to(device)
     N, D = 16, 64
-    input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(16, 64)).astype(np.float32)).to(device)
-    weight_tensor = Tensor.from_numpy(np.random.normal(size=(64, 64)).astype(np.float32)).to(device)
-    target_tensor = Tensor.from_numpy(np.random.randint(0, 2, size=(16)).astype(np.int32)).to(device)
-
+    input_embedding_tensor = Tensor.from_numpy(
+        np.random.normal(size=(16, 64)).astype(np.float32)
+    ).to(device)
+    weight_tensor = Tensor.from_numpy(
+        np.random.normal(size=(64, 64)).astype(np.float32) * 0.01
+    ).to(device)
+    target_tensor = Tensor.from_numpy(
+        np.random.randint(0, 2, size=(16)).astype(np.int32)
+    ).to(device)
 
     mojo_kernels = Path(__file__).parent / "operations"
 
@@ -126,7 +133,7 @@ def train_loop(
                 DType.int32,
                 shape=(N,),
                 device=DeviceRef.from_device(device),
-            )
+            ),
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
@@ -137,14 +144,12 @@ def train_loop(
 
         logits = linear_fwd(input_embedding, weight)
 
-        loss, dlogits = cross_entropy_fwdbwd(
-            logits, target
+        loss, dlogits = cross_entropy_fwdbwd(logits, target)
+        dlogits = ops.mul(
+            dlogits, ops.constant(1.0 / N, weight_tensor.dtype, weight.tensor.device)
         )
-        dlogits = ops.mul(dlogits, ops.constant(1.0 / N, weight_tensor.dtype, weight.tensor.device))
-        
-        _dx, new_weight = linear_bwd(
-            input_embedding, weight, dlogits, lr
-        )
+
+        _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
 
         graph.output(loss, new_weight)
         # The matrix multiplication custom operation takes in two matrices and
@@ -188,9 +193,17 @@ def train_loop(
 
     # Perform the calculation on the target device.
     print("Executing...")
-    for _ in trange(1_000):
-        loss, weight_tensor = model.execute(input_embedding_tensor, weight_tensor, target_tensor)
-        print(loss.to(CPU()).to_numpy().mean())
+    pbar = tqdm()
+    step = 0
+    wandb.init(project="mojo")
+    while True:
+        loss, weight_tensor = model.execute(
+            input_embedding_tensor, weight_tensor, target_tensor
+        )
+        loss_to_log = loss.to(CPU()).to_numpy().mean()
+        pbar.set_postfix({"loss": loss_to_log})
+        wandb.log({"loss": loss_to_log}, step=step)
+        step += 1
 
     # print(f"{weight_tensor=} {dx.shape=}")
     # Copy values back to the CPU to be read.
@@ -198,11 +211,13 @@ def train_loop(
     assert isinstance(weight_tensor, Tensor)
     return loss.to(CPU()), weight_tensor.to(CPU())
 
+
 def numpy_mse(y_points, y_hat_points):
     loss = (y_points - y_hat_points) ** 2
-    grad = - 2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
+    grad = -2 * (y_points - y_hat_points) / (y_points.shape[0] * y_points.shape[1])
     return loss, grad
     # return (x_points - y_points) ** 2
+
 
 if __name__ == "__main__":
     seed = 13
@@ -237,7 +252,7 @@ if __name__ == "__main__":
 
     # assert accelerator_count() > 0
     #     # Then, test the various versions of matrix multiplication operations.
-    loss, weight = train_loop(0.01, session, device)
+    loss, weight = train_loop(0.001, session, device)
     # print("Naive matrix multiplication:")
     # print(loss.to_numpy())
     # print(loss.shape)
