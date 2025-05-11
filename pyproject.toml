@@ -52,6 +52,7 @@ mse = { cmd = "python mse.py", depends-on = ["package"] }
 mymse = { cmd = "python mymse.py" }
 linearbwd = { cmd = "python linearbwd.py" }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
+sdpa = { cmd = "python sdpa.py" }
 
 [tool.pixi.dependencies]
 max = "*"

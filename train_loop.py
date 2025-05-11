@@ -87,6 +87,7 @@ def cross_entropy_fwdbwd(logits, target):
     return loss_val, grad_val
 
 
+
 def train_loop(
     # x_points: NDArray[np.float32],
     # y_points: NDArray[np.float32],
