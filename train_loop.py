@@ -140,6 +140,7 @@ def train_loop(
         loss, dlogits = cross_entropy_fwdbwd(
             logits, target
         )
+        dlogits = ops.mul(dlogits, ops.constant(1.0 / N, weight_tensor.dtype, weight.tensor.device))
         
         _dx, new_weight = linear_bwd(
             input_embedding, weight, dlogits, lr
@@ -193,9 +194,9 @@ def train_loop(
 
     # print(f"{weight_tensor=} {dx.shape=}")
     # Copy values back to the CPU to be read.
-    assert isinstance(dweight, Tensor)
-    assert isinstance(dx, Tensor)
-    return weight.to(CPU()), dx.to(CPU())
+    assert isinstance(loss, Tensor)
+    assert isinstance(weight_tensor, Tensor)
+    return loss.to(CPU()), weight_tensor.to(CPU())
 
 def numpy_mse(y_points, y_hat_points):
     loss = (y_points - y_hat_points) ** 2
@@ -236,10 +237,10 @@ if __name__ == "__main__":
 
     # assert accelerator_count() > 0
     #     # Then, test the various versions of matrix multiplication operations.
-    dx, dweight = train_loop(0.01, session, device)
-    print("Naive matrix multiplication:")
-    print(dx.to_numpy())
-    print(dx.shape)
-    print(dweight.to_numpy())
-    print(dweight.shape)
-    print()
+    loss, weight = train_loop(0.01, session, device)
+    # print("Naive matrix multiplication:")
+    # print(loss.to_numpy())
+    # print(loss.shape)
+    # print(weight.to_numpy())
+    # print(weight.shape)
+    # print()
