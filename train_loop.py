@@ -11,6 +11,7 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -72,7 +73,24 @@ class Linear:
 
 @dataclass
 class Attention:
+    def __call__(self, q, k, v, scale, attn_mask, neginf):
+        heads, n_seq, head_dim = q.shape
+        _, seq_len, post_seq_len = attn_mask.shape
+        attn_mask = attn_mask.broadcast_to(
+            (
+                # batch,
+                heads,
+                seq_len,
+                post_seq_len,
+            )
+        )
 
+        scale = math.sqrt(1.0 / head_dim)
+        scores = q @ ops.transpose(k, -2, -1)
+        # Note, the graph compiler currently requires the order of operands
+        # to be `scores * scale` in order to pattern match the fused attention
+        # operator.
+        scores = ops.softmax(scores * scale + attn_mask)
 
 @dataclass
 class SelfAttention:
@@ -81,10 +99,10 @@ class SelfAttention:
     Wv: Linear
     Wo: Linear
 
-    def __call__(self, q, k, v, scale, attn_mask):
-        q = self.Wq(q)
-        k = self.Wk(k)
-        v = self.Wv(v)
+    def __call__(self, x, scale, attn_mask):
+        q = self.Wq(x)
+        k = self.Wk(x)
+        v = self.Wv(x)
 
         # S = (q / math.sqrt(k.shape[-1])) @ k.transpose((0, 2, 1))
         S = ops.matmul(q, ops.transpose(k, 0, 1))
@@ -94,9 +112,6 @@ class SelfAttention:
 
         return o
     
-
-        
-        
 
 
 def linear_fwd(x, w):
@@ -129,8 +144,6 @@ def self_attn_fwd(x, wq, wk, wv, wo, scale, attn_mask):
     o, attn_saved = attn_fwd(q, k, v, scale, attn_mask)
     final_o = linear_fwd(o, wo)
     return final_o, (saved_for_backward, attn_saved)
-
-def self_attn_bwd(dy, saved_for_backward):
 
 
 
@@ -208,6 +221,9 @@ def train_loop(
         input_embedding, weight, target = graph.inputs
         lr = ops.constant(learning_rate, weight_tensor.dtype, weight.tensor.device)
         scale = ops.constant(1.0 / np.sqrt(D), weight_tensor.dtype, weight.tensor.device)
+        neginf = ops.constant(-1e9, weight_tensor.dtype, weight.tensor.device)
+
+        attn_mask = ops.select(attn_mask, 0, neginf)
 
         logits = linear_fwd(input_embedding, weight)
 
