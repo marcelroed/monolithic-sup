@@ -168,7 +168,7 @@ def run_sdpa(
                 device=DeviceRef.from_device(device),
             ),
             TensorType(
-                dtype,
+                DType.bool,
                 shape=mask.shape,
                 device=DeviceRef.from_device(device),
             ),
