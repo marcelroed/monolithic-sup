@@ -48,6 +48,81 @@ def relu_bwd(dy, grad_mask, constant_zero):
 from max.graph.value import TensorValue
 
 @dataclass
+class Attention:
+    p: TensorValue | None = None
+    q: TensorValue | None = None
+    k: TensorValue | None = None
+    v: TensorValue | None = None
+    attn_mask: TensorValue | None = None
+    head_dim: int = None
+
+
+
+    def __call__(
+        self,
+        Q: TensorValue,
+        K: TensorValue,
+        V: TensorValue,
+        attn_mask: TensorValue,
+        n_heads: int,
+        head_dim: int,
+        neginf: TensorValue,
+        constant_zero: TensorValue,
+    ) -> TensorValue:
+        self.q = Q; self.k = K; self.v = V
+        self.n_heads = n_heads
+        self.head_dim = head_dim
+        self.neginf = neginf
+        self.constant_zero = constant_zero
+        # Broadcast the attention mask across heads.
+        # Do so in the graph so that the broadcast can be fused into downstream
+        # ops.
+        batch, _, seq_len, post_seq_len = attn_mask.shape
+        attn_mask = attn_mask.broadcast_to(
+            (
+                batch,
+                n_heads,
+                seq_len,
+                post_seq_len,
+            )
+        )
+        self.attn_mask = attn_mask
+
+        scale = math.sqrt(1.0 / head_dim)
+        scores = Q @ ops.transpose(K, -2, -1)
+        # Note, the graph compiler currently requires the order of operands
+        # to be `scores * scale` in order to pattern match the fused attention
+        # operator.
+        # scores = ops.softmax(scores * scale + attn_mask)
+        scores = ops.select(attn_mask, scores)
+        scores = ops.softmax(scores * scale)
+
+        self.p = scores
+
+        return scores @ V
+
+    def backward(
+        self,
+        dO: TensorValue,
+        lr: TensorValue,
+    ):
+        dV = ops.matmul(ops.transpose(self.p, 2, 3), dO)
+        dP = ops.matmul(dO, ops.transpose(self.v, -1, -2))
+        
+        dS = ops.add(
+            ops.mul(ops.broadcast_to(-ops.sum(ops.mul(dP, self.p), axis=-1), self.p.shape), self.p),
+            ops.mul(dP, self.p)
+        )
+
+        dS = ops.select(self.attn_mask, dS, self.constant_zero)
+
+        dQ = ops.matmul(dS, self.k) * (1.0 / math.sqrt(self.head_dim))
+        dK = ops.matmul(ops.transpose(dS, -1, -2), self.q) * (1.0 / math.sqrt(self.head_dim))
+        return dQ, dK, dV
+
+
+
+@dataclass
 class Linear:
     weight: TensorValue
 
@@ -68,29 +143,9 @@ class Linear:
             self.weight,
         )
         w_new = update_weight(self.weight, dw, lr)
+        self.weight = w_new
 
-        return dx, w_new 
-
-@dataclass
-class Attention:
-    def __call__(self, q, k, v, scale, attn_mask, neginf):
-        heads, n_seq, head_dim = q.shape
-        _, seq_len, post_seq_len = attn_mask.shape
-        attn_mask = attn_mask.broadcast_to(
-            (
-                # batch,
-                heads,
-                seq_len,
-                post_seq_len,
-            )
-        )
-
-        scale = math.sqrt(1.0 / head_dim)
-        scores = q @ ops.transpose(k, -2, -1)
-        # Note, the graph compiler currently requires the order of operands
-        # to be `scores * scale` in order to pattern match the fused attention
-        # operator.
-        scores = ops.softmax(scores * scale + attn_mask)
+        return dx
 
 @dataclass
 class SelfAttention:
@@ -98,19 +153,24 @@ class SelfAttention:
     Wk: Linear
     Wv: Linear
     Wo: Linear
+    attn: Attention
 
-    def __call__(self, x, scale, attn_mask):
+    def __call__(self, x, attn_mask, n_heads, head_dim, neginf, constant_zero):
         q = self.Wq(x)
         k = self.Wk(x)
         v = self.Wv(x)
 
         # S = (q / math.sqrt(k.shape[-1])) @ k.transpose((0, 2, 1))
-        S = ops.matmul(q, ops.transpose(k, 0, 1))
-        S = ops.mul(S, scale)
-        P = ops.softmax(S, axis=-1)
-        o = ops.matmul(P, v)
+        o = self.attn(q, k, v, attn_mask, n_heads, head_dim, neginf, constant_zero,)
+        o = self.Wo(o)
 
         return o
+    
+    def backward(self, do, lr):
+        do = self.Wo.backward(do, lr)
+        dq, dk, dv = self.attn.backward(do, lr)
+        dx = ops.add(ops.add(self.Wq.backward(dq, lr), self.Wk.backward(dk, lr)), self.Wv.backward(dv, lr))
+        return dx
     
 
 

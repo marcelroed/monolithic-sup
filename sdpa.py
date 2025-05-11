@@ -34,7 +34,6 @@ def attention_fwd(
     attn_mask: TensorValue,
     n_heads: int,
     head_dim: int,
-    constant_zero: TensorValue,
     neginf: TensorValue
 ) -> TensorValue:
     # Broadcast the attention mask across heads.
