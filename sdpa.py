@@ -33,7 +33,8 @@ def attention_fwd(
     V: TensorValue,
     attn_mask: TensorValue,
     n_heads: int,
-    head_dim: int
+    head_dim: int,
+    constant_zero: TensorValue
 ) -> TensorValue:
     # Broadcast the attention mask across heads.
     # Do so in the graph so that the broadcast can be fused into downstream
@@ -49,9 +50,6 @@ def attention_fwd(
     )
 
     scale = math.sqrt(1.0 / head_dim)
-    print(K)
-    print(ops.transpose(K, -2, -1))
-    print("fwd bwd")
     scores = Q @ ops.transpose(K, -2, -1)
     # Note, the graph compiler currently requires the order of operands
     # to be `scores * scale` in order to pattern match the fused attention
@@ -90,7 +88,8 @@ def attention_bwd(
     K: TensorValue,
     V: TensorValue,
     mask: TensorValue,
-    head_dim: int
+    head_dim: int,
+    constant_zero: TensorValue
 ):
     dV = ops.matmul(ops.transpose(P, 2, 3), dO)
     dP = ops.matmul(dO, ops.transpose(V, -1, -2))
@@ -99,10 +98,10 @@ def attention_bwd(
         ops.mul(ops.broadcast_to(-ops.sum(ops.mul(dP, P), axis=-1), P.shape), P),
         ops.mul(dP, P)
     )
-     
+
     # if is_causal:
     #     dS = dS.masked_fill(mask.unsqueeze(0).expand_as(dS), 0)
-    dS = ops.select(mask, dS, 0)
+    dS = ops.select(mask, dS, constant_zero)
 
     # P_m_1_n = ops.reshape(P, (-1, ))
     # dS = dP # TODO: DO THIS
@@ -133,7 +132,7 @@ def run_sdpa(
     k: NDArray[np.float32],
     v: NDArray[np.float32],
     dO: NDArray[np.float32],
-    mask: NDArray[np.float32],
+    mask: NDArray[np.bool],
     session: InferenceSession,
     device: Device,
     n_heads: int,
@@ -183,9 +182,12 @@ def run_sdpa(
     ) as graph:
         q, k, v, mask, dO = graph.inputs
 
-        o, p = attention_fwd(graph, q, k, v, mask, n_heads, head_dim)
+        constant_zero = ops.constant(0.0, DType.bool, q.tensor.device)
+        o, p = attention_fwd(graph, q, k, v, mask, n_heads, head_dim, constant_zero)
+        print("mask",mask)
+        print("constzero",constant_zero)
 
-        dQ, dK, dV = attention_bwd(p, dO, q, k, v, mask, head_dim)
+        dQ, dK, dV = attention_bwd(p, dO, q, k, v, mask, head_dim, constant_zero)
 
         graph.output(o, p)
 
@@ -216,7 +218,7 @@ def main():
     q = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
     k = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
     v = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
-    mask = np.tril(np.ones((batch_size, n_head, seq_len, seq_len))).astype(np.float32)
+    mask = np.tril(np.ones((batch_size, n_head, seq_len, seq_len))).astype(np.bool)
     dO = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
 
     o, p = run_sdpa(q, k, v, dO, mask, session, device, n_head, head_dim)
