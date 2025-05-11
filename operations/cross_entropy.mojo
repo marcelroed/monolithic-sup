@@ -32,45 +32,6 @@ from gpu import (
 
 
 @always_inline
-fn block_reduce[
-    type: DType, max_warps_per_block: Int
-](val: Scalar[type]) -> Scalar[type]:
-    var m2_shared = stack_allocation[
-        max_warps_per_block, type, address_space = AddressSpace.SHARED
-    ]()
-    var m2_broadcast = stack_allocation[
-        1, type, address_space = AddressSpace.SHARED
-    ]()
-
-    var tid = thread_idx.x
-    for i in range(tid, max_warps_per_block, block_dim.x):
-        m2_shared[i] = 0
-
-    if tid == 0:
-        m2_broadcast[0] = 0
-
-    barrier()
-
-    var warp_m2 = warp.sum(val)
-
-    var warp_id = warp.broadcast(tid // WARP_SIZE)
-    var lane_idx = lane_id()
-
-    if lane_idx == 0:
-        m2_shared[warp_id] = warp_m2
-    barrier()
-
-    if warp_id == 0 and lane_idx < max_warps_per_block:
-        var block_m2 = warp.lane_group_sum[num_lanes=max_warps_per_block](
-            m2_shared[lane_idx]
-        )
-        if lane_idx == 0:
-            m2_broadcast[0] = block_m2
-    barrier()
-    return m2_broadcast[0]
-
-
-@always_inline
 fn cross_entropy_kernel_gpu[
     dtype: DType,
     a_layout:  Layout,        # logits  [B, D]
