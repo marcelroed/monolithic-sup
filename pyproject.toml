@@ -53,6 +53,7 @@ mymse = { cmd = "python mymse.py" }
 linearbwd = { cmd = "python linearbwd.py" }
 benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 sdpa = { cmd = "python sdpa.py" }
+tinystory = { cmd = "python tinystory.py" }
 
 [tool.pixi.dependencies]
 max = "*"
