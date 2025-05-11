@@ -268,8 +268,6 @@ if __name__ == "__main__":
     seed = 13
     random.seed(seed)
     np.random.seed(seed)
-    BATCH_SIZE = 16
-    K = 64
 
     # Place the graph on a GPU, if available. Fall back to CPU if not.
     device = CPU() if accelerator_count() == 0 else Accelerator()
@@ -280,20 +278,20 @@ if __name__ == "__main__":
     session = InferenceSession(devices=[device])
 
     # Fill the input matrices with random values.
-    y = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
-    y_hat = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
+    # y = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
+    # y_hat = np.random.uniform(size=(BATCH_SIZE, K)).astype(np.float32)
 
-    print(f"{y.shape=} {y_hat.shape=}")
+    # print(f"{y.shape=} {y_hat.shape=}")
 
-    print(numpy_mse(y, y_hat))
-    print([x.shape for x in numpy_mse(y, y_hat)])
+    # print(numpy_mse(y, y_hat))
+    # print([x.shape for x in numpy_mse(y, y_hat)])
 
     # # First, perform the matrix multiplication in NumPy.
 
     # print("Expected result:")
     # print(a @ b)
     # print()
-    weight = np.random.uniform(size=(K, K)).astype(np.float32)
+    # weight = np.random.uniform(size=(K, K)).astype(np.float32)
 
     # assert accelerator_count() > 0
     #     # Then, test the various versions of matrix multiplication operations.

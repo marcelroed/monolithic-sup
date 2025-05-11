@@ -102,7 +102,8 @@ if __name__ == "__main__":
     loss_and_grad = jax.value_and_grad(MinimalModel.loss)
 
     # ONLY MSE
-    show_function(mse_value_and_grad, y, z, save_as='mse_value_and_grad')
+    # show_function(mse_value_and_grad, y, z, save_as='mse_value_and_grad')
+    show_function(loss_and_grad, weights, x, y, save_as='loss_and_grad')
 
     # SINGLE LINEAR
     # out, linear_vjp = jax.vjp(linear, weights['linear1'], y)
