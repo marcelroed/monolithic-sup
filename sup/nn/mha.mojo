@@ -216,13 +216,8 @@ fn flash_attention_dispatch[
 
     var batch_size: Int
 
-    @parameter
-    if ragged:
-        batch_size = valid_length.shape()[0] - 1
-    # This branch holds for both KVCache and NDBuffer inputs.
-    # Q is BSHD, S is either homogeneous or padded to same length.
-    else:
-        batch_size = q.dim[0]()
+    constrained[ragged==False, "Ragged flash not supported"]()
+    batch_size = q.dim[0]()
 
     alias q_half_float = type in (DType.float16, DType.bfloat16)
 
@@ -248,6 +243,7 @@ fn flash_attention_dispatch[
         k,
         v,
         output.data,
+        l.data,
         scale,
         batch_size,
         max_prompt_len,
@@ -379,6 +375,7 @@ fn mha[
     k: k_t,
     v: v_t,
     output_ptr: UnsafePointer[Scalar[output_type]],
+    l_ptr: UnsafePointer[Scalar[output_type]],
     scale: Float32,
     batch_size: Int,
     seq_len_arg: Int,
@@ -401,124 +398,42 @@ fn mha[
     var mask_tensor_col = num_keys_arg
     var start_pos: UInt32 = 0
 
-    @parameter
-    if ragged:
-        # treat valid_lengths as a input_row_offsets
-        start_of_seq = Int(valid_length[batch_idx])
-        end_of_seq = Int(valid_length[batch_idx + 1])
-        seq_len = end_of_seq - start_of_seq
+    constrained[ragged==False, "Ragged flash not supported"]()
+    constrained[_use_valid_length==False, "Valid length not supported"]()
 
-        if seq_len < block_idx.x * config.block_m():
-            return
+    seq_len = seq_len_arg
+    if seq_len < block_idx.x * config.block_m():
+        return
 
-        start_pos = k.cache_length(batch_idx)
+    num_keys = num_keys_arg
+    q_batch_offset = (
+        config.depth * config.num_heads * max_seq_len * batch_idx
+    )
 
-        # this is used for cross attention where we get the num_keys
-        # from kv_input_row_offsets. This is when num_keys != seq_len
-        if kv_input_row_offsets:
-            var kv_row_offsets = kv_input_row_offsets.value()
-            kv_seq_start = Int(kv_row_offsets[batch_idx])
-            kv_seq_end = Int(kv_row_offsets[batch_idx + 1])
-            cur_kv_len = kv_seq_end - kv_seq_start
-            num_keys = cur_kv_len + k.cache_length(batch_idx)
-        else:
-            num_keys = seq_len + k.cache_length(batch_idx)
+    # When cache length (num_keys) is greater, we assume it has
+    # prefix preceding the input seq_len.
+    start_pos = num_keys - seq_len
 
-        q_batch_offset = start_of_seq * config.depth * config.num_heads
-
-    # KVCache inputs, prompt lengths are all padded to the max in batch.
-    elif _use_valid_length:
-        # treat valid_lengths as valid lengths
-        seq_len = Int(valid_length[batch_idx])
-
-        if seq_len < block_idx.x * config.block_m():
-            return
-
-        @parameter
-        if not _is_cache_length_accurate:
-            var cache_length = k.cache_length(batch_idx)
-            start_pos = cache_length
-
-        num_keys = seq_len + k.cache_length(batch_idx)
-        q_batch_offset = (
-            config.depth * config.num_heads * max_seq_len * batch_idx
-        )
-    # NDBuffer inputs, homogeneous batching.
-    else:
-        seq_len = seq_len_arg
-        if seq_len < block_idx.x * config.block_m():
-            return
-
-        num_keys = num_keys_arg
-        q_batch_offset = (
-            config.depth * config.num_heads * max_seq_len * batch_idx
-        )
-
-        # When cache length (num_keys) is greater, we assume it has
-        # prefix preceding the input seq_len.
-        start_pos = num_keys - seq_len
-
-    @parameter
-    if is_nvidia_gpu():
-
-        @parameter
-        if is_shared_kv:
-            mha_single_batch_pipelined[
-                config=config,
-                group=group,
-                use_score_mod=use_score_mod,
-            ](
-                q_ptr.offset(q_batch_offset),
-                k,
-                v,
-                output_ptr.offset(q_batch_offset),
-                scale,
-                seq_len,
-                max_seq_len,
-                start_pos,
-                num_keys,
-                mask_tensor_col,
-                mask,
-                score_mod,
-                batch_idx,
-            )
-        else:
-            mha_single_batch[
-                config=config,
-                group=group,
-                use_score_mod=use_score_mod,
-            ](
-                q_ptr.offset(q_batch_offset),
-                k,
-                v,
-                output_ptr.offset(q_batch_offset),
-                scale,
-                seq_len,
-                max_seq_len,
-                start_pos,
-                num_keys,
-                mask_tensor_col,
-                mask,
-                score_mod,
-                batch_idx,
-            )
-    else:
-        constrained[
-            use_score_mod == False,
-            "use_score_mod must be False for AMD flash attention",
-        ]()
-        amd_mha_single_batch[group=group, config=config](
-            output_ptr.offset(q_batch_offset),
-            q_ptr.offset(q_batch_offset),
-            k,
-            v,
-            seq_len,
-            num_keys,
-            scale,
-            batch_idx,
-            Int(start_pos),
-            mask,
-        )
+    mha_single_batch[
+        config=config,
+        group=group,
+        use_score_mod=use_score_mod,
+    ](
+        q_ptr.offset(q_batch_offset),
+        k,
+        v,
+        output_ptr.offset(q_batch_offset),
+        l_ptr.offset(q_batch_offset),
+        scale,
+        seq_len,
+        max_seq_len,
+        start_pos,
+        num_keys,
+        mask_tensor_col,
+        mask,
+        score_mod,
+        batch_idx,
+    )
 
 
 @__llvm_metadata(
@@ -540,6 +455,7 @@ fn mha_single_batch[
     k: k_t,
     v: v_t,
     output_ptr: UnsafePointer[Scalar[output_type]],
+    l_ptr: UnsafePointer[Scalar[output_type]],
     scale: Float32,
     seq_len: Int,  # valid sequence length i.e. w/o padding.
     max_seq_len: Int,  # sequence length after padding.
@@ -1161,6 +1077,31 @@ fn mha_single_batch[
     var output_gmem_warp_tile = output_gmem_tile.tile[WM, WN](
         Int(warp_y), Int(warp_x)
     )
+
+    alias l_gmem_layout = Layout(
+        IntTuple(Int(BM), 1), IntTuple(Int(num_heads), 1)
+    )
+    var l_gmem_tile = LayoutTensor[
+        output_type,
+        l_gmem_layout,
+        layout_int_type = DType.int32,
+        linear_idx_type = DType.int32,
+        masked=True,
+    ](
+        l_ptr + Int(q_offset),
+        RuntimeLayout[
+            element_type = DType.int32, linear_idx_type = DType.int32
+        ](
+            RuntimeTuple[l_gmem_layout.shape, element_type = DType.int32](
+                Int(q_tile_num_rows),
+            ),
+            RuntimeTuple[l_gmem_layout.stride, element_type = DType.int32](
+                num_heads, 1
+            ),
+        ),
+    )
+    var l_gmem_warp_tile = l_gmem_tile.tile[WM, WN](Int(warp_y), Int(warp_x))
+
 
     # Write to global memory.
     @parameter
