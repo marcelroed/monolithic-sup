@@ -193,13 +193,13 @@ def run_sdpa(
 
         dQ, dK, dV = attention_bwd(p, dO, q, k, v, mask, head_dim, constant_zero)
 
-        graph.output(o, p)
+        graph.output(o, p, dQ, dK, dV)
 
     model = session.load(graph)
 
-    o, p = model.execute(q_tensor, k_tensor, v_tensor, mask_tensor, dO_tensor)
+    o, p, dQ, dK, dV = model.execute(q_tensor, k_tensor, v_tensor, mask_tensor, dO_tensor)
 
-    return o.to(CPU()), p.to(CPU())
+    return o.to(CPU()), p.to(CPU()), dQ.to(CPU()), dK.to(CPU()), dV.to(CPU())
 
 def main():
     batch_size = 16
@@ -225,9 +225,29 @@ def main():
     mask = np.tril(np.ones((batch_size, n_head, seq_len, seq_len))).astype(np.bool)
     dO = np.random.uniform(size=(batch_size, n_head, seq_len, head_dim)).astype(np.float32)
 
-    o, p = run_sdpa(q, k, v, dO, mask, session, device, n_head, head_dim)
+    o, p, dQ, dK, dV = run_sdpa(q, k, v, dO, mask, session, device, n_head, head_dim)
     print(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy())
     print(np.linalg.norm(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy()))
+
+    q = torch.tensor(q, requires_grad=True)
+    k = torch.tensor(k, requires_grad=True)
+    v = torch.tensor(v, requires_grad=True)
+    mask = torch.tensor(mask)
+    dO = torch.tensor(dO)
+
+    loss = scaled_dot_product_attention(q, k, v, attn_mask=mask)
+    loss.backward(dO)
+    print(dQ, dK, dV)
+
+    print(q.grad)
+
+    print(np.linalg.norm(q.grad.numpy() - dQ.to_numpy()))
+    print(np.linalg.norm(k.grad.numpy() - dK.to_numpy()))
+    print(np.linalg.norm(v.grad.numpy() - dV.to_numpy()))
+
+    # print(dQ, dK, dV)
+
+
 
     # print(o.to_numpy())
 
@@ -261,75 +281,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def run_mymse(
-    x_points: NDArray[np.float32],
-    y_points: NDArray[np.float32],
-    algorithm: str,
-    session: InferenceSession,
-    device: Device,
-) -> Tensor:
-    dtype = DType.float32
-
-    # Create driver tensors from the input arrays, and move them to the
-    # accelerator.
-    x_tensor = Tensor.from_numpy(x_points).to(device)
-    y_tensor = Tensor.from_numpy(y_points).to(device)
-
-    mojo_kernels = Path(__file__).parent / "operations"
-
-    # Configure our simple one-operation graph.
-    with Graph(
-        "sdpa_graph",
-        input_types=[
-            TensorType(
-                dtype,
-                shape=x_tensor.shape,
-                device=DeviceRef.from_device(device),
-            ),
-            TensorType(
-                dtype,
-                shape=y_tensor.shape,
-                device=DeviceRef.from_device(device),
-            ),
-        ],
-        custom_extensions=[mojo_kernels],
-    ) as graph:
-        # Take in the two inputs to the graph.
-        x_value, y_value = graph.inputs
-        # The matrix multiplication custom operation takes in two matrices and
-        # produces a result, with the specific algorithm that is used chosen
-        # via compile-time parameterization.
-        res = ops.custom(
-            name="sdpa",
-            values=[x_value, y_value],
-            out_types=[
-                TensorType(
-                    dtype=x_value.tensor.dtype,
-                    shape=[1, 1],
-                    device=DeviceRef.from_device(device),
-                ),
-                TensorType(
-                    dtype=x_value.tensor.dtype,
-                    shape=[x_value.tensor.shape[0], y_value.tensor.shape[1]],
-                    device=DeviceRef.from_device(device),
-                ),
-            ],
-            parameters={"algorithm": algorithm},
-        )
-        graph.output(*res)
-        # graph.output(res[1])
-
-    # Compile the graph.
-    print("Compiling...")
-    model = session.load(graph)
-
-    # Perform the calculation on the target device.
-    print("Executing...")
-    loss, grad = model.execute(x_tensor, y_tensor)
-
-    print(f"{loss=} {grad.shape=}")
-    # Copy values back to the CPU to be read.
-    assert isinstance(loss, Tensor)
-    assert isinstance(grad, Tensor)
-    return loss.to(CPU()), grad.to(CPU())
