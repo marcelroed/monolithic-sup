@@ -11,7 +11,7 @@ from layout.layout_tensor import (
 from layout.math import outer_product_acc
 from layout.tensor_builder import LayoutTensorBuild as tb
 from layout.tensor_core import TensorCore
-from math import ceildiv, exp, log
+from math import ceildiv, exp, log, sqrt
 from memory import UnsafePointer
 from runtime.asyncrt import DeviceContextPtr
 from sys.info import simdwidthof
@@ -41,11 +41,12 @@ fn adamw_step_kernel_gpu[
     next_v_layout: Layout,      # output memory 2
     next_weight_layout: Layout,  # updated weights
     d_weight_layout: Layout,        # gradients
-    lr: DType.float32 = 0.001,
-    beta1: DType.float32 = 0.9,
-    beta2: DType.float32 = 0.999,
-    eps: DType.float32 = 1e-8,
-    weight_decay: DType.float32 = 0.01,
+    t_layout: Layout,
+    lr: Scalar[dtype] = 0.001,
+    beta1: Scalar[dtype] = 0.9,
+    beta2: Scalar[dtype] = 0.999,
+    eps: Scalar[dtype] = 1e-8,
+    weight_decay: Scalar[dtype] = 0.01,
 ](
     prev_m: LayoutTensor[dtype, prev_m_layout, MutableAnyOrigin],
     prev_v: LayoutTensor[dtype, prev_v_layout, MutableAnyOrigin],
@@ -54,7 +55,7 @@ fn adamw_step_kernel_gpu[
     next_v: LayoutTensor[dtype, next_v_layout, MutableAnyOrigin],
     next_weight: LayoutTensor[dtype, next_weight_layout, MutableAnyOrigin],
     d_weight: LayoutTensor[dtype, d_weight_layout, MutableAnyOrigin],
-    t: DType.int32 = 0,
+    t: LayoutTensor[DType.int32, t_layout, MutableAnyOrigin],
 ):
     # Shapes
     var N = prev_m.dim[0]()
@@ -71,8 +72,8 @@ fn adamw_step_kernel_gpu[
     m_i = beta1 * m_i + (1 - beta1) * g_i
     v_i = beta2 * v_i + (1 - beta2) * g_i * g_i
 
-    alpha_i = alpha * (sqrt(1 - (beta_2**t)) / (1 - (beta_1**t)))
-    var udpate = alpha_i * m_i / (sqrt(v_i) + eps) + alpha * weight_decay * w_i
+    var alpha_i = lr * (sqrt(1 - (beta2**Int(t[0]))) / (1 - beta1**Int(t[0])))
+    var udpate = alpha_i * m_i / (sqrt(v_i) + eps) + lr * weight_decay * w_i
 
     next_m[idx] = m_i
     next_v[idx] = v_i
@@ -87,18 +88,17 @@ struct AdamW:
         # The kind of device this will be run on: "cpu" or "gpu"
         target: StaticString,
     ](
-        # The input tensor
-        prev_m: InputTensor,
-        prev_v: InputTensor,
-        prev_weight: InputTensor,
         # The output tensor
-        next_m: OutputTensor,
-        next_v: OutputTensor,
-        next_weight: OutputTensor,
+        next_m: OutputTensor[rank=1],
+        next_v: OutputTensor[type=next_m.type,rank=1],
+        next_weight: OutputTensor[type=next_m.type,rank=1],
+        # The input tensor
+        prev_m: InputTensor[type=next_m.type,rank=1],
+        prev_v: InputTensor[type=next_m.type,rank=1],
+        prev_weight: InputTensor[type=next_m.type,rank=1],
         # The gradient tensor
-        d_weight: InputTensor,
-        # The learning rate
-        t: Int,
+        d_weight: InputTensor[type=next_m.type,rank=1],
+        t: InputTensor[type=DType.int32, rank=1],
         ctx: DeviceContextPtr,
     ) raises:
         # At graph compilation time, we will know what device we are compiling
@@ -113,18 +113,21 @@ struct AdamW:
             next_v_layout = next_v.to_layout_tensor()
             next_weight_layout = next_weight.to_layout_tensor()
             d_weight_layout = d_weight.to_layout_tensor()
+            t_layout = t.to_layout_tensor()
 
             alias blockX = 256
+            N = prev_m_layout.dim[0]()
             gpu_ctx.enqueue_function[
-                adamw_kernel_gpu[
-                    prev_m_layout.type,
-                    prev_m_layout,
-                    prev_v_layout,
-                    prev_weight_layout,
-                    next_m_layout,
-                    next_v_layout,
-                    next_weight_layout,
-                    d_weight_layout,
+                adamw_step_kernel_gpu[
+                    prev_m.type,
+                    prev_m_layout.layout,
+                    prev_v_layout.layout,
+                    prev_weight_layout.layout,
+                    next_m_layout.layout,
+                    next_v_layout.layout,
+                    next_weight_layout.layout,
+                    d_weight_layout.layout,
+                    t_layout.layout,
                 ]
             ](
                 prev_m_layout,
@@ -134,7 +137,7 @@ struct AdamW:
                 next_v_layout,
                 next_weight_layout,
                 d_weight_layout,
-                t,
-                grid_dim=(ceildiv(prev_m_layout.dim[0](), blockX)),
-                block_dim=(blockX),
+                t_layout,
+                grid_dim=(ceildiv(N, blockX),1),
+                block_dim=(blockX,1),
             )
