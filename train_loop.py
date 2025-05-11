@@ -11,6 +11,7 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,87 @@ from tqdm import trange, tqdm
 import wandb
 
 from dataclasses import dataclass
+
+def update_weight(w, dw, lr):
+    return ops.sub(w, ops.mul(lr, dw))
+
+
+def relu_fwd(x, constant_zero):
+    y = ops.relu(x)
+    grad_mask = ops.greater_equal(x, constant_zero)
+    return y, grad_mask
+
+
+def relu_bwd(dy, grad_mask, constant_zero):
+    dx = ops.select(grad_mask, dy, constant_zero)
+    return dx
+
+from max.graph.value import TensorValue
+
+@dataclass
+class Linear:
+    weight: TensorValue
+
+    # Saved for bwd
+    x_activation: TensorValue | None = None
+
+    def __call__(self, x: TensorValue) -> TensorValue:
+        self.x_activation = x
+        return ops.matmul(x, ops.transpose(self.weight))
+    
+    def backward(self, dy: TensorValue, lr: TensorValue) -> tuple[TensorValue, TensorValue]:
+        dw = ops.matmul(
+            ops.transpose(dy, 0, 1),
+            self.x_activation,
+        )
+        dx = ops.matmul(
+            dy,
+            self.weight,
+        )
+        w_new = update_weight(self.weight, dw, lr)
+
+        return dx, w_new 
+
+@dataclass
+class Attention:
+    def __call__(self, q, k, v, scale, attn_mask, neginf):
+        heads, n_seq, head_dim = q.shape
+        _, seq_len, post_seq_len = attn_mask.shape
+        attn_mask = attn_mask.broadcast_to(
+            (
+                # batch,
+                heads,
+                seq_len,
+                post_seq_len,
+            )
+        )
+
+        scale = math.sqrt(1.0 / head_dim)
+        scores = q @ ops.transpose(k, -2, -1)
+        # Note, the graph compiler currently requires the order of operands
+        # to be `scores * scale` in order to pattern match the fused attention
+        # operator.
+        scores = ops.softmax(scores * scale + attn_mask)
+
+@dataclass
+class SelfAttention:
+    Wq: Linear
+    Wk: Linear
+    Wv: Linear
+    Wo: Linear
+
+    def __call__(self, x, scale, attn_mask):
+        q = self.Wq(x)
+        k = self.Wk(x)
+        v = self.Wv(x)
+
+        # S = (q / math.sqrt(k.shape[-1])) @ k.transpose((0, 2, 1))
+        S = ops.matmul(q, ops.transpose(k, 0, 1))
+        S = ops.mul(S, scale)
+        P = ops.softmax(S, axis=-1)
+        o = ops.matmul(P, v)
+
+        return o
 
 
 def update_weight(w, dw, lr):
@@ -88,19 +170,16 @@ def cross_entropy_fwdbwd(logits, target):
 
 
 def train_loop(
-    learning_rate: float,
     session: InferenceSession,
     device: Device,
+    learning_rate: float = 0.01,
+    batch_size: int = 256,
+    model_dim: int = 2048,
 ) -> Tensor:
     dtype = DType.float32
 
-    # Create driver tensors from the input arrays, and move them to the
-    # accelerator.
-    # dout_tensor = Tensor.from_numpy(x_points).to(device)
-    # x_activation_tensor = Tensor.from_numpy(y_points).to(device)
-    # weight_tensor = Tensor.from_numpy(weight).to(device)
-    B, D = 64, 128
-    V = 32
+    B, D = batch_size, model_dim
+    V = 1024
     input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, D)).astype(np.float32)).to(device)
     weight_tensor = Tensor.from_numpy(np.random.normal(size=(V, D)).astype(np.float32) * 0.02).to(device)
     # target_tensor = Tensor.from_numpy(np.random.randint(0, D, size=(B,)).astype(np.int32)).to(device)
@@ -150,40 +229,7 @@ def train_loop(
         _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
 
         graph.output(loss, new_weight)
-        # The matrix multiplication custom operation takes in two matrices and
-        # produces a result, with the specific algorithm that is used chosen
-        # via compile-time parameterization.
-        # res = ops.custom(
-        #     name="line",
-        #     values=[x_value, y_value],
-        #     out_types=[
-        #         TensorType(
-        #             dtype=x_value.tensor.dtype,
-        #             shape=[1, 1],
-        #             device=DeviceRef.from_device(device),
-        #         ),
-        #         TensorType(
-        #             dtype=x_value.tensor.dtype,
-        #             shape=[x_value.tensor.shape[0], y_value.tensor.shape[1]],
-        #             device=DeviceRef.from_device(device),
-        #         ),
-        #     ],
-        #     parameters={"algorithm": algorithm},
-        # )
-        # lr_const = ops.constant(-learning_rate, weight_tensor.dtype, weight_tensor_value.device)
-        # dweight_tensor_value = ops.matmul(
-        #     ops.transpose(x_activation_tensor_value, 0, 1),
-        #     dout_tensor_value,
-        # )
-        # dx_tensor_value = ops.matmul(
-        #     dout_tensor_value,
-        #     weight_tensor_value,
-        # )
-        # weight_tensor_value = ops.add(
-        #     weight_tensor_value, ops.mul(lr_const, dweight_tensor_value)
-        # )
-        # graph.output(weight_tensor_value, dx_tensor_value)
-        # graph.output(res[1])
+
 
     # Compile the graph.
     print("Compiling...")
@@ -193,14 +239,15 @@ def train_loop(
     print("Executing...")
     pbar = tqdm()
     step = 0
-    wandb.init(project="mojo")
-    while True:
+    # wandb.init(project="mojo")
+    for i in trange(100_000):
         loss, weight_tensor = model.execute(
             input_embedding_tensor, weight_tensor, target_tensor
         )
         loss_to_log = loss.to(CPU()).to_numpy().mean()
-        pbar.set_postfix({"loss": loss_to_log})
-        wandb.log({"loss": loss_to_log}, step=step)
+        print(f'train_loss = {loss_to_log}')
+        # pbar.set_postfix({"loss": loss_to_log})
+        # wandb.log({"loss": loss_to_log}, step=step)
         step += 1
 
     # print(f"{weight_tensor=} {dx.shape=}")
@@ -250,7 +297,7 @@ if __name__ == "__main__":
 
     # assert accelerator_count() > 0
     #     # Then, test the various versions of matrix multiplication operations.
-    loss, weight = train_loop(0.001, session, device)
+    loss, weight = train_loop(session, device, learning_rate=0.01)
     # print("Naive matrix multiplication:")
     # print(loss.to_numpy())
     # print(loss.shape)
