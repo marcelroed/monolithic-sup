@@ -44,6 +44,60 @@ def relu_bwd(dy, grad_mask, constant_zero):
     dx = ops.select(grad_mask, dy, constant_zero)
     return dx
 
+from max.graph.value import TensorValue
+
+@dataclass
+class Linear:
+    weight: TensorValue
+
+    # Saved for bwd
+    x_activation: TensorValue | None = None
+
+    def __call__(self, x: TensorValue) -> TensorValue:
+        self.x_activation = x
+        return ops.matmul(x, ops.transpose(self.weight))
+    
+    def backward(self, dy: TensorValue, lr: TensorValue) -> tuple[TensorValue, TensorValue]:
+        dw = ops.matmul(
+            ops.transpose(dy, 0, 1),
+            self.x_activation,
+        )
+        dx = ops.matmul(
+            dy,
+            self.weight,
+        )
+        w_new = update_weight(self.weight, dw, lr)
+
+        return dx, w_new 
+
+@dataclass
+class Attention:
+
+
+@dataclass
+class SelfAttention:
+    Wq: Linear
+    Wk: Linear
+    Wv: Linear
+    Wo: Linear
+
+    def __call__(self, q, k, v, scale, attn_mask):
+        q = self.Wq(q)
+        k = self.Wk(k)
+        v = self.Wv(v)
+
+        # S = (q / math.sqrt(k.shape[-1])) @ k.transpose((0, 2, 1))
+        S = ops.matmul(q, ops.transpose(k, 0, 1))
+        S = ops.mul(S, scale)
+        P = ops.softmax(S, axis=-1)
+        o = ops.matmul(P, v)
+
+        return o
+    
+
+        
+        
+
 
 def linear_fwd(x, w):
     y = ops.matmul(x, ops.transpose(w, 0, 1))
@@ -62,6 +116,23 @@ def linear_bwd(x, w, dy, lr):
     w_new = update_weight(w, dw, lr)
 
     return dx, w_new
+
+
+def attn_fwd(q, k, v, scale, attn_mask):
+    attn_mask = attn_mask.broadcast_to()
+
+def self_attn_fwd(x, wq, wk, wv, wo, scale, attn_mask):
+    saved_for_backward = (x, wq, wk, wv, scale)
+    q = linear_fwd(x, wq)
+    k = linear_fwd(x, wk)
+    v = linear_fwd(x, wv)
+    o, attn_saved = attn_fwd(q, k, v, scale, attn_mask)
+    final_o = linear_fwd(o, wo)
+    return final_o, (saved_for_backward, attn_saved)
+
+def self_attn_bwd(dy, saved_for_backward):
+
+
 
 
 def cross_entropy_fwdbwd(logits, target):
@@ -85,6 +156,7 @@ def cross_entropy_fwdbwd(logits, target):
         # parameters={"algorithm": algorithm},  # if you want to select variants
     )
     return loss_val, grad_val
+
 
 
 def train_loop(
@@ -135,6 +207,7 @@ def train_loop(
         # dout_tensor_value, x_activation_tensor_value, weight_tensor_value = graph.inputs
         input_embedding, weight, target = graph.inputs
         lr = ops.constant(learning_rate, weight_tensor.dtype, weight.tensor.device)
+        scale = ops.constant(1.0 / np.sqrt(D), weight_tensor.dtype, weight.tensor.device)
 
         logits = linear_fwd(input_embedding, weight)
 
