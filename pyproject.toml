@@ -11,6 +11,8 @@ dependencies = [
     "transformers>=4.51.3,<5",
     "protobuf>=6.30.2,<7",
     "grpcio>=1.71.0,<2",
+    "wandb",
+    "tqdm",
 ]
 
 [build-system]
@@ -53,3 +55,4 @@ benchmarks = { cmd = "mojo benchmarks.mojo", depends-on = ["package"] }
 
 [tool.pixi.dependencies]
 max = "*"
+ipython = ">=9.2.0,<10"
