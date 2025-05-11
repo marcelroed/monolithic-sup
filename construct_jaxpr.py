@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 import math
+from jax import lax
 
 
 # @partial(jax.remat, policy=jax.checkpoint_policies.nothing_saveable)
@@ -63,6 +64,31 @@ def cross_entropy_loss(y_pred, y_true):
     return -jnp.sum(y_true * jnp.log(y_pred + 1e-10)) / y_pred.shape[0]
 
 
+def softmax(x, axis=-1):
+    x_max = jnp.max(x, axis=axis, keepdims=True)
+    unnormalized = jnp.exp(x - lax.stop_gradient(x_max))
+    denom = jnp.sum(unnormalized, axis=axis, keepdims=True)
+    # denom = checkpoint_name(denom, "denom")
+    return unnormalized / denom
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(1,))
+def _softmax(x, axis: int | tuple[int, ...] | None = -1, where=None, initial=-jnp.inf):
+    x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
+    x_safe = x if where is None else jnp.where(where, x, initial)
+    unnormalized = jnp.exp(x_safe - x_max)
+    result = unnormalized / jnp.sum(unnormalized, axis, where=where, keepdims=True, dtype=jnp.float32).astype(x.dtype)
+    if where is not None:
+        result = jnp.where(where, result, 0)
+    return result
+
+@_softmax.defjvp
+def _softmax_jvp(axis, primals, tangents):
+    (x, where, initial), (x_dot, _, _) = primals, tangents
+    y = _softmax(x, axis, where, initial)
+    return y, y * (x_dot - jnp.sum(y * x_dot, axis, where=where, keepdims=True, dtype=jnp.float32)).astype(x_dot.dtype)
+
+
 mse_value_and_grad = jax.value_and_grad(mse_fun)
 
 def show_function(fun, *args, save_as: str = None):
@@ -107,6 +133,14 @@ if __name__ == "__main__":
     # SINGLE LINEAR
     # out, linear_vjp = jax.vjp(linear, weights['linear1'], y)
     # show_function(linear_vjp, x, save_as='linear_vjp')
+
+    out, linear_vjp = jax.vjp(linear, weights['linear1'], y)
+    show_function(linear_vjp, x, save_as='linear_vjp')
+
+    input_softmax = jax.random.normal(jax.random.PRNGKey(0), (10, 15))
+    out, softmax_vjp = jax.vjp(_softmax, input_softmax)
+    show_function(softmax_vjp, input_softmax, save_as='softmax_vjp')
+
 
     # model_jaxpr = jax.make_jaxpr(MinimalModel.single_update)(weights, x, y)
     # print(model_jaxpr)
