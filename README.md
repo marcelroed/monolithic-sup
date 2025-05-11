@@ -1,5 +1,11 @@
-# Mojo GPU Hackathon
+# Monolithic Sup
 
-[google docs](https://docs.google.com/document/d/1YsYfQvjYkH0CRNZktFt0Z4OP8sn1EnQxdoTo3TDC97s/edit?tab=t.0)
+Mojo is great for inference, but currently lacks support for training the LLMs it runs so well. Well.. not anymore! Say hello to Monolithic Sup! Not quite Modular Max (but kind of close).
 
-Install `magic` CLI, then run any of the tasks listed in the `pyproject.toml`.
+It is a growing collection of fused backward-forward kernels implemented in Mojo (no CUDA) like cross entropy, linear, AdamW.. (and some backward implementations using the Max graph api, like attention).
+
+### Getting started
+
+```bash
+magic run python train_loop.py
+```
