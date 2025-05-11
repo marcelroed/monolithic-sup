@@ -89,9 +89,6 @@ def cross_entropy_fwdbwd(logits, target):
 
 
 def train_loop(
-    # x_points: NDArray[np.float32],
-    # y_points: NDArray[np.float32],
-    # weight: NDArray[np.float32],
     learning_rate: float,
     session: InferenceSession,
     device: Device,
@@ -103,16 +100,13 @@ def train_loop(
     # dout_tensor = Tensor.from_numpy(x_points).to(device)
     # x_activation_tensor = Tensor.from_numpy(y_points).to(device)
     # weight_tensor = Tensor.from_numpy(weight).to(device)
-    N, D = 16, 64
-    input_embedding_tensor = Tensor.from_numpy(
-        np.random.normal(size=(16, 64)).astype(np.float32)
-    ).to(device)
-    weight_tensor = Tensor.from_numpy(
-        np.random.normal(size=(64, 64)).astype(np.float32) * 0.01
-    ).to(device)
-    target_tensor = Tensor.from_numpy(
-        np.random.randint(0, 2, size=(16)).astype(np.int32)
-    ).to(device)
+    B, D = 64, 128
+    V = 32
+    input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, D)).astype(np.float32)).to(device)
+    weight_tensor = Tensor.from_numpy(np.random.normal(size=(V, D)).astype(np.float32) * 0.02).to(device)
+    # target_tensor = Tensor.from_numpy(np.random.randint(0, D, size=(B,)).astype(np.int32)).to(device)
+    target_tensor = Tensor.from_numpy(np.ones((B,)).astype(np.int32)).to(device)
+
 
     mojo_kernels = Path(__file__).parent / "operations"
 
@@ -132,7 +126,7 @@ def train_loop(
             ),
             TensorType(  # target
                 DType.int32,
-                shape=(N,),
+                shape=(B,),
                 device=DeviceRef.from_device(device),
             ),
         ],
@@ -145,9 +139,13 @@ def train_loop(
 
         logits = linear_fwd(input_embedding, weight)
 
-        loss, dlogits = cross_entropy_fwdbwd(logits, target)
-        dlogits = ops.mul(
-            dlogits, ops.constant(1.0 / N, weight_tensor.dtype, weight.tensor.device)
+        loss, dlogits = cross_entropy_fwdbwd(
+            logits, target
+        )
+        dlogits = ops.mul(dlogits, ops.constant(1.0 / B, weight_tensor.dtype, weight.tensor.device))
+        
+        _dx, new_weight = linear_bwd(
+            input_embedding, weight, dlogits, lr
         )
 
         _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
