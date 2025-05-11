@@ -51,8 +51,8 @@ def linear_fwd(x, w):
 
 def linear_bwd(x, w, dy, lr):
     dw = ops.matmul(
-        ops.transpose(x, 0, 1),
-        dy,
+        ops.transpose(dy, 0, 1),
+        x,
     )
     dx = ops.matmul(
         dy,
@@ -98,8 +98,9 @@ def train_loop(
     # x_activation_tensor = Tensor.from_numpy(y_points).to(device)
     # weight_tensor = Tensor.from_numpy(weight).to(device)
     B, D = 64, 128
+    V = 32
     input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, D)).astype(np.float32)).to(device)
-    weight_tensor = Tensor.from_numpy(np.random.normal(size=(D, D)).astype(np.float32) * 0.02).to(device)
+    weight_tensor = Tensor.from_numpy(np.random.normal(size=(V, D)).astype(np.float32) * 0.02).to(device)
     # target_tensor = Tensor.from_numpy(np.random.randint(0, D, size=(B,)).astype(np.int32)).to(device)
     target_tensor = Tensor.from_numpy(np.ones((B,)).astype(np.int32)).to(device)
 
@@ -235,7 +236,7 @@ if __name__ == "__main__":
 
     # assert accelerator_count() > 0
     #     # Then, test the various versions of matrix multiplication operations.
-    loss, weight = train_loop(0.001, session, device)
+    loss, weight = train_loop(0.01, session, device)
     # print("Naive matrix multiplication:")
     # print(loss.to_numpy())
     # print(loss.shape)
