@@ -28,6 +28,7 @@ from sys import (
     sizeof,
 )
 from sys.intrinsics import _type_is_eq
+from testing import assert_true
 
 import gpu.warp as warp
 from algorithm import elementwise
@@ -130,60 +131,6 @@ from layout import Layout
 # ===-----------------------------------------------------------------------===#
 
 
-fn flash_attention[
-    rank: Int,
-    type: DType,
-    q_shape: DimList, //,
-    use_score_mod: Bool = False,
-    config: MHAConfig = MHAConfig(type, q_shape.get[2](), q_shape.get[3]()),
-    decoding_warp_split_k: Bool = False,
-    naive_kernel: Bool = False,
-](
-    output: NDBuffer[mut=True, _, rank, *_],
-    q: NDBuffer[type, rank, _, q_shape, *_],
-    k: NDBuffer[_, rank, *_],
-    v: NDBuffer[_, rank, *_],
-    mask: NDBuffer,
-    scale: Float32,
-    context: DeviceContextPtr = DeviceContextPtr(),
-    num_partitions: OptionalReg[Int] = None,
-) raises:
-    # TODO docstring
-    @always_inline
-    @parameter
-    fn description_fn() -> String:
-        return String(";").join(
-            trace_arg("q", q),
-            trace_arg("k", k),
-            trace_arg("v", v),
-            trace_arg("output", output),
-        )
-
-    var ctx = context.get_device_context()
-
-    with Trace[TraceLevel.OP, target = ctx.device_info.api](
-        "flash_attention",
-        Trace[TraceLevel.OP, target = ctx.device_info.api]._get_detail_str[
-            description_fn
-        ](),
-    ):
-        return flash_attention[
-            use_score_mod=use_score_mod,
-            config=config,
-            decoding_warp_split_k=decoding_warp_split_k,
-            naive_kernel=naive_kernel,
-        ](
-            output,
-            q,
-            k,
-            v,
-            MaterializedMask(mask),
-            IdentityScoreMod(),
-            scale,
-            context.get_device_context(),
-            num_partitions,
-        )
-
 
 fn get_mha_decoding_num_partitions[
     num_heads: Int, group: Int
@@ -211,147 +158,11 @@ fn flash_attention_hw_supported[qkv_type: DType]() -> Bool:
     )
 
 
-# Entry point for flash_attention with batch_size > 1.
-@always_inline
-fn flash_attention[
-    rank: Int,
-    cache_t: KVCacheT,
-    mask_t: MHAMask,
-    score_mod_t: ScoreModTrait,
-    type: DType,
-    q_shape: DimList, //,
-    use_score_mod: Bool = False,
-    config: MHAConfig = MHAConfig(
-        type, q_shape.get[rank - 2](), q_shape.get[rank - 1]()
-    ),
-    ragged: Bool = False,
-    decoding_warp_split_k: Bool = False,
-    naive_kernel: Bool = False,
-    assert_write_mode: WRITE_MODE = WRITE_MODE_REG,
-](
-    output: NDBuffer[mut=True, _, rank, *_],
-    q: NDBuffer[type, rank, _, q_shape, *_],
-    k: cache_t,
-    v: cache_t,
-    mask_functor: mask_t,
-    score_mod_functor: score_mod_t,
-    valid_length: ManagedTensorSlice[type = DType.uint32, rank=1],
-    scale: Float32,
-    ctx: DeviceContext,
-    q_max_seq_len: OptionalReg[Int] = None,
-    kv_input_row_offsets: OptionalReg[
-        NDBuffer[DType.uint32, 1, MutableAnyOrigin]
-    ] = None,
-    num_partitions: OptionalReg[Int] = None,
-) raises:
-    """Flash attention 2 algorithm.
-    Compute:
-        (1) Transpose (Q) BSHD -> BHSD;
-        (2) Transpose (K) BSHD -> BHSD;
-        (3) Transpose (V) BSHD -> BHSD;
-        (4) P = Bmm(Q, K), P is also called "score";
-        (5) P = P * scale + mask;
-        (6) P = softmax(P);
-        (7) O = Bmm(P, V)
-        (8) Output = Transpose(O).
-
-    B, S, H, D denote batch size, sequence length, head count and depth, respectively.
-    (1), (2), (3) happens while loading the data into shared memory.
-    (8) happens when writing output to global memory.
-
-    All inputs (query, key, and value) must have BSHD layout. The mask can be
-    BSS or BHSS.
-
-    This kernel also handles grouped attention optimization. In this case the shape of
-    K and V are BShD where h = H / num_groups.
-
-    This kernels handles batches with different valid lengths (i.e., before the
-    padding). Such lengths are passed in valid_length argument.
-    """
-    constrained[
-        ragged or rank == 4, "only support rank 4 inputs for non-ragged inputs."
-    ]()
-    constrained[
-        not ragged or rank == 3, "only support rank 3 inputs for ragged inputs."
-    ]()
-    constrained[
-        q.type == cache_t.type == output.type,
-        "Q, K, V, output should have same type.",
-    ]()
-    constrained[
-        q.type is DType.float32 or q.type.is_half_float(),
-        "Only support single and half precision.",
-    ]()
-
-    # TODO docstring
-    @always_inline
-    @parameter
-    fn description_fn() -> String:
-        return String(";").join(
-            trace_arg("q", q),
-            trace_arg("output", output),
-        )
-
-    with Trace[TraceLevel.OP, target = ctx.device_info.api](
-        "flash_attention",
-        Trace[TraceLevel.OP, target = ctx.device_info.api]._get_detail_str[
-            description_fn
-        ](),
-    ):
-        # TODO: This helps differentiate between CE/TG. Not batch-specific.
-        #       We'll just implement a flag on the cache object which is true
-        #       when the batch contains all cache_lens == 0. Remove this when
-        #       such flag (part of ContiguousKVCache) is implemented.
-        var is_token_generation = k.max_prompt_length() == 1 and not k.empty_cache()
-
-        var max_prompt_len: Int
-        var num_keys = Int(k.max_context_length())
-
-        if q_max_seq_len:
-            max_prompt_len = q_max_seq_len.value()
-        else:
-            max_prompt_len = Int(k.max_prompt_length())
-
-        # Whether head and depth are static. With BSHD, B and S are dynamic.
-        # H and D are always known for opaque KVCache types, we only check Q.
-        # fmt: off
-        alias head_depth_known = q.shape.all_known[rank-2, rank]()
-        # Current impl has only been verified for depth = 128.
-        alias flash_attention_applicable = flash_attention_hw_supported[type]() and head_depth_known and q.shape.get[rank-1]() == 128 and not naive_kernel
-        # fmt: on
-        alias kv_num_heads = cache_t.kv_params.num_heads
-
-        var k_operand = KVCacheMHAOperand(k)
-        var v_operand = KVCacheMHAOperand(v)
-
-        flash_attention_dispatch[
-            kv_num_heads=kv_num_heads,
-            use_score_mod=use_score_mod,
-            config=config,
-            ragged=ragged,
-            _is_flash_attention_applicable=flash_attention_applicable,
-            decoding_warp_split_k=decoding_warp_split_k,
-        ](
-            output,
-            q,
-            k_operand,
-            v_operand,
-            mask_functor,
-            score_mod_functor,
-            valid_length,
-            max_prompt_len,
-            num_keys,
-            scale,
-            is_token_generation,
-            ctx,
-            kv_input_row_offsets,
-            num_partitions,
-        )
-
 
 @always_inline
 fn flash_attention_dispatch[
     rank: Int,
+    lrank: Int,
     k_t: MHAOperand,
     v_t: MHAOperand,
     mask_t: MHAMask,
@@ -376,6 +187,7 @@ fn flash_attention_dispatch[
     decoding_warp_split_k: Bool = False,
 ](
     output: NDBuffer[_, rank, *_],
+    l: NDBuffer[mut=True, _, lrank, *_],
     q: NDBuffer[type, rank, _, q_shape, *_],
     k: k_t,
     v: v_t,
@@ -414,388 +226,52 @@ fn flash_attention_dispatch[
 
     alias q_half_float = type in (DType.float16, DType.bfloat16)
 
-    @parameter
-    if _is_flash_attention_applicable:
-        if not is_token_generation:
-            # TODO note that we have to handle mask tensor alignment here.
-            # Choose matmul parameters based on dtype.
-            @parameter
-            if (
-                ctx.device_info is H100
-                and q_half_float
-                and (ragged or not _use_valid_length)
-            ):
-                mha_sm90_dispatch[
-                    config=config,
-                    group=group,
-                    use_score_mod=use_score_mod,
-                    ragged=ragged,
-                    _is_cache_length_accurate=_is_cache_length_accurate,
-                ](
-                    output.data,
-                    q.data,
-                    k,
-                    v,
-                    mask_functor,
-                    score_mod_functor,
-                    valid_length,
-                    DynamicInt(max_prompt_len),
-                    max_cache_valid_length,
-                    scale,
-                    kv_input_row_offsets,
-                    batch_size,
-                    NoPartition[get_accum_type[q.type]()](),
-                    ctx,
-                )
-
-            else:
-                alias BM = config.block_m()
-                alias smem_use = config.shared_mem_bytes[is_shared_kv]()
-                alias kernel = mha[
-                    config.type,
-                    k_t,
-                    v_t,
-                    output.type,
-                    mask_t,
-                    score_mod_t,
-                    config,
-                    group=group,
-                    use_score_mod=use_score_mod,
-                    ragged=ragged,
-                    is_shared_kv=is_shared_kv,
-                    _use_valid_length=_use_valid_length,
-                    _is_cache_length_accurate=_is_cache_length_accurate,
-                ]
-                ctx.enqueue_function[kernel](
-                    q.data,
-                    k,
-                    v,
-                    output.data,
-                    scale,
-                    batch_size,
-                    max_prompt_len,
-                    max_cache_valid_length,
-                    valid_length,
-                    kv_input_row_offsets,
-                    mask_functor,
-                    score_mod_functor,
-                    grid_dim=(
-                        Int(ceildiv(max_prompt_len, BM)),
-                        Int(config.num_heads),
-                        Int(batch_size),
-                    ),
-                    block_dim=(Int(config.num_threads()), 1, 1),
-                    shared_mem_bytes=Int(smem_use),
-                    func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
-                        smem_use
-                    ),
-                )
-        # Decoding impl only support half precision.
-        elif q_half_float and is_token_generation:
-            alias BM = 16
-            alias BN = depth
-            alias BK = 32 if has_amd_gpu_accelerator() else (
-                16 if q.type is DType.float32 else 32
-            )
-            alias WM = BM
-            alias WN = 32
-            # num warps in M and N, multipled by warp size.
-            alias num_threads = (BM // WM) * (BN // WN) * WARP_SIZE
-
-            alias accum_type = get_accum_type[q.type]()
-            alias num_pipeline_stages = 4
-            # smem for q
-            var shared_mem_bytes = BM * depth * sizeof[q.type]()
-
-            # seperate KV smem if we have enough smem
-            @parameter
-            if not is_shared_kv:
-                shared_mem_bytes += 2 * BN * depth * sizeof[k_t.type]()
-            else:
-                shared_mem_bytes += (
-                    num_pipeline_stages * BN * BK * sizeof[k_t.type]()
-                )
-
-            alias num_warps = ceildiv(num_threads, WARP_SIZE)
-
-            # smem for p and warp_scratch
-            shared_mem_bytes += (
-                BM * BN * sizeof[k_t.type]()
-                + 2 * num_warps * BM * sizeof[accum_type]()
-            )
-            alias num_blocks_y = num_heads // group
-
-            var num_partitions_value: Int
-
-            @parameter
-            if has_amd_gpu_accelerator():
-                # TODO(KERN-1358) Support num_partitions > 1 for paged attn.
-                num_partitions_value = 1
-            else:
-                num_partitions_value = num_partitions.value() if num_partitions else get_mha_decoding_num_partitions[
-                    num_heads, group
-                ](
-                    batch_size, max_cache_valid_length, ctx
-                )
-
-            alias use_sm90_kernel = (
-                ctx.device_info is H100
-                and q_half_float
-                and (ragged or not _use_valid_length)
-                and mask_t.mask_safe_out_of_bounds
-            )
-            alias kernel = mha_decoding[
-                q.type,
-                k_t,
-                v_t,
-                output.type,
-                mask_t,
-                score_mod_t,
-                BM=BM,
-                BN=BN,
-                BK=BK,
-                WM=WM,
-                WN=WN,
-                depth=depth,
-                num_heads=num_heads,
-                num_threads=num_threads,
-                num_pipeline_stages=num_pipeline_stages,
-                group=group,
-                use_score_mod=use_score_mod,
-                ragged=ragged,
-                is_shared_kv=is_shared_kv,
-                _use_valid_length=_use_valid_length,
-                _is_cache_length_accurate=_is_cache_length_accurate,
-                decoding_warp_split_k=decoding_warp_split_k,
-            ]
-
-            if num_partitions_value == 1:
-
-                @parameter
-                if use_sm90_kernel:
-                    mha_sm90_dispatch[
-                        config=config,
-                        group=group,
-                        use_score_mod=use_score_mod,
-                        ragged=ragged,
-                        _is_cache_length_accurate=_is_cache_length_accurate,
-                    ](
-                        output.data,
-                        q.data,
-                        k,
-                        v,
-                        mask_functor,
-                        score_mod_functor,
-                        valid_length,
-                        StaticInt[1](),
-                        max_cache_valid_length,
-                        scale,
-                        kv_input_row_offsets,
-                        batch_size,
-                        NoPartition[accum_type](),
-                        ctx,
-                    )
-                else:
-                    alias nullptr = UnsafePointer[Scalar[accum_type]]()
-                    ctx.enqueue_function[kernel](
-                        q.data,
-                        k,
-                        v,
-                        output.data,
-                        nullptr,
-                        nullptr,
-                        scale,
-                        batch_size,
-                        num_partitions_value,
-                        max_cache_valid_length,
-                        valid_length,
-                        mask_functor,
-                        score_mod_functor,
-                        grid_dim=(
-                            1,
-                            Int(num_blocks_y),
-                            Int(batch_size),
-                        ),
-                        block_dim=(num_threads, 1, 1),
-                        shared_mem_bytes=shared_mem_bytes if has_nvidia_gpu_accelerator() else 0,
-                        func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
-                            (
-                                ctx.device_info.shared_memory_per_multiprocessor
-                                - 4096
-                            ) if has_nvidia_gpu_accelerator() else 0
-                        ),
-                    )
-                return
-
-            else:
-                # We split partitions and then reduce
-                # allocate memory for intermediate results
-                # q # [B, S, H, D]
-                var output_intermediate_data = ctx.enqueue_create_buffer[
-                    output.type
-                ](num_heads * depth * batch_size * num_partitions_value)
-
-                var output_intermediate = NDBuffer[output.type, 4](
-                    output_intermediate_data._unsafe_ptr(),
-                    Index(
-                        num_partitions_value,
-                        batch_size,
-                        Int(num_heads),
-                        Int(depth),
-                    ),
-                )
-
-                var data_len = num_heads * batch_size * num_partitions_value
-                var data_dim = Index(
-                    num_partitions_value,
-                    batch_size,
-                    Int(num_heads),
-                )
-                var exp_sum_qk_max_data = ctx.enqueue_create_buffer[accum_type](
-                    2 * data_len
-                )
-
-                var exp_sum = NDBuffer[accum_type, 3](
-                    exp_sum_qk_max_data._unsafe_ptr(), data_dim
-                )
-
-                var qk_max = NDBuffer[accum_type, 3](
-                    exp_sum_qk_max_data._unsafe_ptr().offset(data_len), data_dim
-                )
-
-                @parameter
-                if use_sm90_kernel:
-                    # FIXME: pass `exp_sum_qk_max_data`
-                    mha_sm90_dispatch[
-                        config=config,
-                        group=group,
-                        use_score_mod=use_score_mod,
-                        ragged=ragged,
-                        _is_cache_length_accurate=_is_cache_length_accurate,
-                    ](
-                        output_intermediate.data,
-                        q.data,
-                        k,
-                        v,
-                        mask_functor,
-                        score_mod_functor,
-                        valid_length,
-                        StaticInt[1](),
-                        max_cache_valid_length,
-                        scale,
-                        kv_input_row_offsets,
-                        batch_size,
-                        SplitKPartition(
-                            exp_sum_qk_max_data._unsafe_ptr(),
-                            num_partitions_value,
-                        ),
-                        ctx,
-                    )
-                else:
-                    ctx.enqueue_function[kernel](
-                        q.data,
-                        k,
-                        v,
-                        output_intermediate.data,
-                        exp_sum.data,
-                        qk_max.data,
-                        scale,
-                        batch_size,
-                        num_partitions_value,
-                        max_cache_valid_length,
-                        valid_length,
-                        mask_functor,
-                        score_mod_functor,
-                        grid_dim=(
-                            num_partitions_value,
-                            Int(num_blocks_y),
-                            Int(batch_size),
-                        ),
-                        block_dim=(num_threads, 1, 1),
-                        shared_mem_bytes=shared_mem_bytes,
-                        func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
-                            ctx.device_info.shared_memory_per_multiprocessor
-                            - 4096
-                        ),
-                    )
-
-                alias kernel_reduce = mha_splitk_reduce[
-                    output.type,
-                    depth=depth,
-                    num_heads=num_heads,
-                    num_threads=WARP_SIZE,
-                    group=group,
-                    use_exp2=use_sm90_kernel,
-                ]
-
-                ctx.enqueue_function[kernel_reduce](
-                    output_intermediate.data,
-                    output.data,
-                    exp_sum.data,
-                    qk_max.data,
-                    batch_size,
-                    num_partitions_value,
-                    grid_dim=(
-                        1,
-                        Int(num_heads),
-                        batch_size,
-                    ),
-                    block_dim=(WARP_SIZE, 1, 1),
-                )
-                _ = exp_sum_qk_max_data^
-                _ = output_intermediate_data^
-
-        # Not supported by contexting and decoding, e.g cross-attention or depth != 128
-        else:
-            # Assumes BSHD.
-            mha_gpu_naive[
-                ragged=ragged,
-                _use_valid_length=_use_valid_length,
-                _is_cache_length_accurate=_is_cache_length_accurate,
-            ](
-                q,
-                k,
-                v,
-                mask_functor,
-                output,
-                valid_length,
-                scale,
-                batch_size,
-                max_prompt_len,
-                max_cache_valid_length,
-                num_heads,
-                depth,
-                group,
-                ctx,
-            )
-
-    # Not supported by fast flash attention kernel.
-    else:
-        # Assumes BSHD.
-        mha_gpu_naive[
-            ragged=ragged,
-            _use_valid_length=_use_valid_length,
-            _is_cache_length_accurate=_is_cache_length_accurate,
-        ](
-            q,
-            k,
-            v,
-            mask_functor,
-            output,
-            valid_length,
-            scale,
-            batch_size,
-            max_prompt_len,
-            max_cache_valid_length,
-            num_heads,
-            depth,
-            group,
-            ctx,
-        )
+    alias BM = config.block_m()
+    alias smem_use = config.shared_mem_bytes[is_shared_kv]()
+    alias kernel = mha[
+        config.type,
+        k_t,
+        v_t,
+        output.type,
+        mask_t,
+        score_mod_t,
+        config,
+        group=group,
+        use_score_mod=use_score_mod,
+        ragged=ragged,
+        is_shared_kv=is_shared_kv,
+        _use_valid_length=_use_valid_length,
+        _is_cache_length_accurate=_is_cache_length_accurate,
+    ]
+    ctx.enqueue_function[kernel](
+        q.data,
+        k,
+        v,
+        output.data,
+        scale,
+        batch_size,
+        max_prompt_len,
+        max_cache_valid_length,
+        valid_length,
+        kv_input_row_offsets,
+        mask_functor,
+        score_mod_functor,
+        grid_dim=(
+            Int(ceildiv(max_prompt_len, BM)),
+            Int(config.num_heads),
+            Int(batch_size),
+        ),
+        block_dim=(Int(config.num_threads()), 1, 1),
+        shared_mem_bytes=Int(smem_use),
+        func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
+            smem_use
+        ),
+    )
 
 
 fn flash_attention[
     rank: Int,
+    lrank: Int,
     mask_t: MHAMask,
     score_mod_t: ScoreModTrait,
     type: DType,
@@ -806,6 +282,7 @@ fn flash_attention[
     naive_kernel: Bool = False,
 ](
     output: NDBuffer[mut=True, _, rank, *_],
+    l: NDBuffer[mut=True, _, lrank, *_],
     q: NDBuffer[type, rank, _, q_shape, *_],
     k: NDBuffer[_, rank, *_],
     v: NDBuffer[_, rank, *_],
@@ -857,6 +334,7 @@ fn flash_attention[
         decoding_warp_split_k=decoding_warp_split_k,
     ](
         output,
+        l,
         q,
         k_operand,
         v_operand,
