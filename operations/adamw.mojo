@@ -32,64 +32,51 @@ from gpu import (
 
 
 @always_inline
-fn adamw_kernel_gpu[
+fn adamw_step_kernel_gpu[
     dtype: DType,
-    a_layout:  Layout,        # logits  [B, D]
-    b_layout:  Layout,        # labels  [B, D]  (one‑hot rows)
-    loss_layout: Layout,      # per instance  [B]
-    grad_layout: Layout,      # grad    [B, D]
-    max_warps_per_block: Int = 8,
+    prev_m_layout:  Layout,        # adamW memory 1
+    prev_v_layout:  Layout,        # adamW memory 2
+    prev_weight_layout: Layout,    # weights
+    next_m_layout: Layout,      # output memory 1
+    next_v_layout: Layout,      # output memory 2
+    next_weight_layout: Layout,  # updated weights
+    d_weight_layout: Layout,        # gradients
+    lr: DType.float32 = 0.001,
+    beta1: DType.float32 = 0.9,
+    beta2: DType.float32 = 0.999,
+    eps: DType.float32 = 1e-8,
+    weight_decay: DType.float32 = 0.01,
 ](
-    logits: LayoutTensor[dtype, a_layout, MutableAnyOrigin],
-    labels: LayoutTensor[DType.int32, b_layout, MutableAnyOrigin],
-    out_loss: LayoutTensor[dtype, loss_layout, MutableAnyOrigin],
-    dlogits: LayoutTensor[dtype, grad_layout, MutableAnyOrigin],
+    prev_m: LayoutTensor[dtype, prev_m_layout, MutableAnyOrigin],
+    prev_v: LayoutTensor[dtype, prev_v_layout, MutableAnyOrigin],
+    prev_weight: LayoutTensor[dtype, prev_weight_layout, MutableAnyOrigin],
+    next_m: LayoutTensor[dtype, next_m_layout, MutableAnyOrigin],
+    next_v: LayoutTensor[dtype, next_v_layout, MutableAnyOrigin],
+    next_weight: LayoutTensor[dtype, next_weight_layout, MutableAnyOrigin],
+    d_weight: LayoutTensor[dtype, d_weight_layout, MutableAnyOrigin],
+    t: DType.int32 = 0,
 ):
     # Shapes
-    var B = logits.dim[0]()
-    var D = logits.dim[1]()
-    var row = block_dim.y * block_idx.y + thread_idx.y
-    if row >= B:
+    var N = prev_m.dim[0]()
+    var idx = block_dim.x * block_idx.x + thread_idx.x
+    if idx >= N:
         return
-    var lane = lane_id()
 
-    var m_i = logits[row, lane]  # max of current tile
-    var m_new = logits[row, lane]  # max of current tile
-    var l_i = exp(m_i - m_i)  # running scaled sum
+    # AdamW step
+    var m_i = prev_m[idx]
+    var v_i = prev_v[idx]
+    var w_i = prev_weight[idx]
+    var g_i = d_weight[idx]
 
-    var count = 0
-    for col in range(lane+WARP_SIZE, D, WARP_SIZE):
-        var x = logits[row, col]
+    m_i = beta1 * m_i + (1 - beta1) * g_i
+    v_i = beta2 * v_i + (1 - beta2) * g_i * g_i
 
-        if x > m_i:
-            m_new = x
+    alpha_i = alpha * (sqrt(1 - (beta_2**t)) / (1 - (beta_1**t)))
+    var udpate = alpha_i * m_i / (sqrt(v_i) + eps) + alpha * weight_decay * w_i
 
-        # update the running scaled sum  (log‑sum‑exp recurrence)
-        var scaled_l = exp(m_i - m_new) * l_i
-        var add_l    = exp(x - m_new)
-
-        l_i = scaled_l + add_l
-        m_i = m_new
-        count += 1
-
-    var lane_lse = log(l_i) + m_i
-    var warp_max = warp.lane_group_max_and_broadcast[num_lanes=WARP_SIZE](lane_lse)
-    var lane_l_i = exp(lane_lse - warp_max)
-    var total_l_i = warp.lane_group_sum_and_broadcast[num_lanes=WARP_SIZE](lane_l_i)
-    var lse = log(total_l_i) + warp_max
-
-    out_loss[row] = lse - logits[row, Int(labels[row])]
-
-    # Compute the gradient
-    for col in range(lane, D, WARP_SIZE):
-        var grad = exp(logits[row, col] - lse)
-        if col == Int(labels[row]):
-            grad -= 1
-        dlogits[row, col] = grad
-
-    #if lane == 0:
-    #    print("row ", row, " ", lse_sum)
-
+    next_m[idx] = m_i
+    next_v[idx] = v_i
+    next_weight[idx] = w_i - udpate
 
 
 @compiler.register("adamw")
@@ -100,68 +87,54 @@ struct AdamW:
         # The kind of device this will be run on: "cpu" or "gpu"
         target: StaticString,
     ](
-        out_loss: OutputTensor[rank=1],
-        dlogits: OutputTensor[type=out_loss.type, rank=2],
-        logits: InputTensor[type=out_loss.type, rank=2],
-        labels: InputTensor[type=DType.int32, rank=1],
+        # The input tensor
+        prev_m: InputTensor,
+        prev_v: InputTensor,
+        prev_weight: InputTensor,
+        # The output tensor
+        next_m: OutputTensor,
+        next_v: OutputTensor,
+        next_weight: OutputTensor,
+        # The gradient tensor
+        d_weight: InputTensor,
+        # The learning rate
+        t: Int,
         ctx: DeviceContextPtr,
     ) raises:
         # At graph compilation time, we will know what device we are compiling
         # this operation for, so we can specialize it for the target hardware.
         @parameter
         if target == "gpu":
-            logits_layout = logits.to_layout_tensor()
-            labels_layout = labels.to_layout_tensor()
-            out_grad_layout = dlogits.to_layout_tensor()
-            out_loss_layout = out_loss.to_layout_tensor()
-
-
             gpu_ctx = ctx.get_device_context()
-            B = logits_layout.dim[0]()
-            D = logits_layout.dim[1]()
+            prev_m_layout = prev_m.to_layout_tensor()
+            prev_v_layout = prev_v.to_layout_tensor()
+            prev_weight_layout = prev_weight.to_layout_tensor()
+            next_m_layout = next_m.to_layout_tensor()
+            next_v_layout = next_v.to_layout_tensor()
+            next_weight_layout = next_weight.to_layout_tensor()
+            d_weight_layout = d_weight.to_layout_tensor()
 
-            # Zero out the memory in the outbound tensor.
-            gpu_ctx.enqueue_memset(
-                DeviceBuffer[dlogits.type](
-                    gpu_ctx,
-                    rebind[UnsafePointer[Scalar[dlogits.type]]](out_grad_layout.ptr),
-                    B*D,
-                    owning=False,
-                ),
-                0,
-            )
-
-            gpu_ctx.enqueue_memset(
-                DeviceBuffer[out_loss.type](
-                    gpu_ctx,
-                    rebind[UnsafePointer[Scalar[out_loss.type]]](out_loss_layout.ptr),
-                    1,
-                    owning=False,
-                ),
-                0,
-            )
-
-            # Launch the kernel
-            alias blockX = 32
-            alias blockY = 8
-            alias rows_per_block = blockY
-
+            alias blockX = 256
             gpu_ctx.enqueue_function[
                 adamw_kernel_gpu[
-                    out_loss.type,
-                    logits_layout.layout,
-                    labels_layout.layout,
-                    out_loss_layout.layout,
-                    out_grad_layout.layout,
+                    prev_m_layout.type,
+                    prev_m_layout,
+                    prev_v_layout,
+                    prev_weight_layout,
+                    next_m_layout,
+                    next_v_layout,
+                    next_weight_layout,
+                    d_weight_layout,
                 ]
             ](
-                logits_layout,
-                labels_layout,
-                out_loss_layout,
-                out_grad_layout,
-                grid_dim=(
-                    1,
-                    ceildiv(B, rows_per_block),
-                ),
-                block_dim=(blockX, blockY),
+                prev_m_layout,
+                prev_v_layout,
+                prev_weight_layout,
+                next_m_layout,
+                next_v_layout,
+                next_weight_layout,
+                d_weight_layout,
+                t,
+                grid_dim=(ceildiv(prev_m_layout.dim[0](), blockX)),
+                block_dim=(blockX),
             )
