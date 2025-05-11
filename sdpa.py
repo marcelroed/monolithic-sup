@@ -34,7 +34,8 @@ def attention_fwd(
     attn_mask: TensorValue,
     n_heads: int,
     head_dim: int,
-    constant_zero: TensorValue
+    constant_zero: TensorValue,
+    neginf: TensorValue
 ) -> TensorValue:
     # Broadcast the attention mask across heads.
     # Do so in the graph so that the broadcast can be fused into downstream
@@ -54,7 +55,9 @@ def attention_fwd(
     # Note, the graph compiler currently requires the order of operands
     # to be `scores * scale` in order to pattern match the fused attention
     # operator.
-    scores = ops.softmax(scores * scale + attn_mask)
+    # scores = ops.softmax(scores * scale + attn_mask)
+    scores = ops.select(attn_mask, scores, neginf)
+    scores = ops.softmax(scores * scale)
 
     return scores @ V, scores # scores are P
 
@@ -183,7 +186,8 @@ def run_sdpa(
         q, k, v, mask, dO = graph.inputs
 
         constant_zero = ops.constant(0.0, DType.bool, q.tensor.device)
-        o, p = attention_fwd(graph, q, k, v, mask, n_heads, head_dim, constant_zero)
+        neginf = ops.constant(-1e9, DType.float32, q.tensor.device)
+        o, p = attention_fwd(graph, q, k, v, mask, n_heads, head_dim, constant_zero, neginf)
         print("mask",mask)
         print("constzero",constant_zero)
 
@@ -223,8 +227,11 @@ def main():
 
     o, p = run_sdpa(q, k, v, dO, mask, session, device, n_head, head_dim)
     print(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy())
+    print(np.linalg.norm(o.to_numpy() - scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask)).numpy()))
 
-    print(o.to_numpy())
+    # print(o.to_numpy())
+
+    # scaled_dot_product_attention(torch.tensor(q), torch.tensor(k), torch.tensor(v), attn_mask=torch.tensor(mask))
     # print(p.to_numpy())
 
     # # Fill the input matrices with random values.
