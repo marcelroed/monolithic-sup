@@ -161,7 +161,6 @@ class SelfAttention:
         k = self.Wk(x)
         v = self.Wv(x)
 
-        # S = (q / math.sqrt(k.shape[-1])) @ k.transpose((0, 2, 1))
         o = self.attn(q, k, v, attn_mask, n_heads, head_dim, neginf, constant_zero,)
         o = self.Wo(o)
 
@@ -176,13 +175,13 @@ class SelfAttention:
 
 
 def linear_fwd(x, w):
-    y = ops.matmul(x, ops.transpose(w, 0, 1))
+    y = ops.matmul(x, ops.transpose(w, -2, -1))
     return y
 
 
 def linear_bwd(x, w, dy, lr):
     dw = ops.matmul(
-        ops.transpose(dy, 0, 1),
+        ops.transpose(dy, -2, -1),
         x,
     )
     dx = ops.matmul(
@@ -207,9 +206,9 @@ def self_attn_fwd(x, wq, wk, wv, wo, scale, attn_mask):
     return final_o, (saved_for_backward, attn_saved)
 
 
-
-
 def cross_entropy_fwdbwd(logits, target):
+    assert len(logits.shape) == 2, f'Expected 2d logits, got {logits.shape}'
+    assert len(target.shape) == 1, f'Expected 1d targets, got {target.shape}'
     loss_val, grad_val = ops.custom(
         name="cross_entropy",
         values=[logits, target],
@@ -247,11 +246,16 @@ def train_loop(
     # weight_tensor = Tensor.from_numpy(weight).to(device)
     B, D = 64, 128
     V = 32
-    input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, D)).astype(np.float32)).to(device)
+    T = 256
+    input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, T, D)).astype(np.float32)).to(device)
     weight_tensor = Tensor.from_numpy(np.random.normal(size=(V, D)).astype(np.float32) * 0.02).to(device)
     # target_tensor = Tensor.from_numpy(np.random.randint(0, D, size=(B,)).astype(np.int32)).to(device)
-    target_tensor = Tensor.from_numpy(np.ones((B,)).astype(np.int32)).to(device)
+    target_tensor = Tensor.from_numpy(np.ones((B, T)).astype(np.int32)).to(device)
 
+    qi = np.arange(T)[:, None]
+    ki = np.arange(T)[None, :]
+
+    attn_mask_tensor = Tensor.from_numpy(qi >= ki).to(device)
 
     mojo_kernels = Path(__file__).parent / "operations"
 
@@ -271,27 +275,37 @@ def train_loop(
             ),
             TensorType(  # target
                 DType.int32,
-                shape=(B,),
+                shape=(B, T),
                 device=DeviceRef.from_device(device),
             ),
+            TensorType(  # attn_mask
+                DType.bool,
+                shape=(T, T),
+                device=DeviceRef.from_device(device),
+            )
         ],
         custom_extensions=[mojo_kernels],
     ) as graph:
         # Take in the two inputs to the graph.
         # dout_tensor_value, x_activation_tensor_value, weight_tensor_value = graph.inputs
-        input_embedding, weight, target = graph.inputs
+        input_embedding, weight, target, attn_mask = graph.inputs
         lr = ops.constant(learning_rate, weight_tensor.dtype, weight.tensor.device)
         scale = ops.constant(1.0 / np.sqrt(D), weight_tensor.dtype, weight.tensor.device)
         neginf = ops.constant(-1e9, weight_tensor.dtype, weight.tensor.device)
 
         attn_mask = ops.select(attn_mask, 0, neginf)
 
-        logits = linear_fwd(input_embedding, weight)
+        logits = linear_fwd(input_embedding, weight).reshape((B * T, V))
 
         loss, dlogits = cross_entropy_fwdbwd(
-            logits, target
+            logits, target.reshape((B * T,))
         )
+        dlogits = dlogits.reshape((B, T, V))
         dlogits = ops.mul(dlogits, ops.constant(1.0 / B, weight_tensor.dtype, weight.tensor.device))
+
+        # B, D = 64, 128
+        # V = 32
+        # T = 256
         
         _dx, new_weight = linear_bwd(
             input_embedding, weight, dlogits, lr
@@ -343,14 +357,14 @@ def train_loop(
     print("Executing...")
     pbar = tqdm()
     step = 0
-    wandb.init(project="mojo")
+    # wandb.init(project="mojo")
     while True:
         loss, weight_tensor = model.execute(
-            input_embedding_tensor, weight_tensor, target_tensor
+            input_embedding_tensor, weight_tensor, target_tensor, attn_mask_tensor,
         )
         loss_to_log = loss.to(CPU()).to_numpy().mean()
         pbar.set_postfix({"loss": loss_to_log})
-        wandb.log({"loss": loss_to_log}, step=step)
+        # wandb.log({"loss": loss_to_log}, step=step)
         step += 1
 
     # print(f"{weight_tensor=} {dx.shape=}")
