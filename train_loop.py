@@ -12,9 +12,11 @@
 # ===----------------------------------------------------------------------=== #
 
 import math
+import argparse
 from pathlib import Path
 
 import numpy as np
+from dataset import download_dataset
 from max.driver import CPU, Accelerator, Device, Tensor, accelerator_count
 from max.dtype import DType
 from max.engine import InferenceSession
@@ -29,7 +31,6 @@ from tqdm import trange, tqdm
 import wandb
 
 from dataclasses import dataclass
-
 
 def update_weight(w, dw, lr):
     return ops.sub(w, ops.mul(lr, dw))
@@ -381,6 +382,11 @@ def numpy_mse(y_points, y_hat_points):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Run train loop')
+    parser.add_argument('--dir', type=str, default='fineweb10B', help='Local directory (default: fineweb10B)')
+    args = parser.parse_args()
+    download_dataset(args.dir)
+
     seed = 13
     random.seed(seed)
     np.random.seed(seed)

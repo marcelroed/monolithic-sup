@@ -58,3 +58,4 @@ tinystory = { cmd = "python tinystory.py" }
 [tool.pixi.dependencies]
 max = "*"
 ipython = ">=9.2.0,<10"
+ipdb = ">=0.13.13,<0.14"
