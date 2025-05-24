@@ -1,7 +1,8 @@
-# test_adamw.py
+# test_adamw_comprehensive.py
 from pathlib import Path
-from typing import Tuple
-
+from typing import Tuple, List, Dict
+from tqdm import tqdm
+import time
 import numpy as np
 
 # ---- Runtime / driver imports ----------------------------------------------
@@ -73,12 +74,10 @@ def adamw_step(
                 TensorType(dtype, pv_t.shape, device=DeviceRef.from_device(device)),
                 TensorType(dtype, pw_t.shape, device=DeviceRef.from_device(device)),
             ],
-            # No compile‑time parameters needed for this kernel
         )
         graph.output(next_m_val, next_v_val, next_w_val)
 
     # 3) Compile & run
-    # import ipdb; ipdb.set_trace() # fmt: skip
     model = session.load(graph)
     next_m, next_v, next_w = model.execute(pm_t, pv_t, pw_t, dw_t, step_t_t)
 
@@ -87,65 +86,315 @@ def adamw_step(
 
 
 # ---------------------------------------------------------------------------
-# Quick functional check against a NumPy reference implementation
+# NumPy reference implementation
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":
+def adamw_numpy_reference(
+    prev_m: np.ndarray,
+    prev_v: np.ndarray,
+    prev_w: np.ndarray,
+    grad: np.ndarray,
+    t: int,
+    lr: float = 1e-3,
+    beta1: float = 0.9,
+    beta2: float = 0.999,
+    eps: float = 1e-8,
+    weight_decay: float = 1e-2,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """NumPy reference implementation of AdamW"""
+    m_ref = beta1 * prev_m + (1.0 - beta1) * grad
+    v_ref = beta2 * prev_v + (1.0 - beta2) * grad**2
+
+    # Bias-corrected step size
+    alpha_t = lr * np.sqrt(1.0 - beta2**t) / (1.0 - beta1**t)
+    update = alpha_t * m_ref / (np.sqrt(v_ref) + eps) + lr * weight_decay * prev_w
+    w_ref = prev_w - update
+
+    return m_ref, v_ref, w_ref
+
+
+# ---------------------------------------------------------------------------
+# Test utilities
+# ---------------------------------------------------------------------------
+def compute_errors(mojo_result: Tensor, numpy_ref: np.ndarray) -> Dict[str, float]:
+    """Compute various error metrics between Mojo result and NumPy reference"""
+    mojo_np = mojo_result.to_numpy()
+
+    # L2 relative error
+    l2_norm = np.linalg.norm(numpy_ref.ravel())
+    l2_rel_err = np.linalg.norm((mojo_np - numpy_ref).ravel()) / (l2_norm + 1e-12)
+
+    # Max absolute error
+    max_abs_err = np.max(np.abs(mojo_np - numpy_ref))
+
+    # Max relative error
+    max_rel_err = np.max(
+        np.abs(mojo_np - numpy_ref) / np.maximum(np.abs(numpy_ref), 1e-12)
+    )
+
+    # Mean absolute error
+    mean_abs_err = np.mean(np.abs(mojo_np - numpy_ref))
+
+    return {
+        "l2_rel": l2_rel_err,
+        "max_abs": max_abs_err,
+        "max_rel": max_rel_err,
+        "mean_abs": mean_abs_err,
+    }
+
+
+def run_single_test(
+    N: int,
+    t: int,
+    session: InferenceSession,
+    device: Device,
+    rng: np.random.Generator,
+    hyperparams: Dict[str, float],
+    verbose: bool = True,
+) -> Dict[str, float]:
+    """Run a single test case with given size and timestep"""
+    # Generate random test data
+    prev_m = rng.standard_normal(N, dtype=np.float32) * 0.1
+    prev_v = rng.standard_normal(N, dtype=np.float32) ** 2 * 0.1
+    prev_w = rng.standard_normal(N, dtype=np.float32)
+    grad = rng.standard_normal(N, dtype=np.float32)
+
+    # Time the Mojo kernel
+    start_time = time.time()
+    mojo_m, mojo_v, mojo_w = adamw_step(
+        prev_m,
+        prev_v,
+        prev_w,
+        grad,
+        step_t=t,
+        **hyperparams,
+        session=session,
+        device=device,
+    )
+    mojo_time = time.time() - start_time
+
+    # Compute NumPy reference
+    start_time = time.time()
+    ref_m, ref_v, ref_w = adamw_numpy_reference(
+        prev_m, prev_v, prev_w, grad, t, **hyperparams
+    )
+    numpy_time = time.time() - start_time
+
+    # Compute errors
+    m_errors = compute_errors(mojo_m, ref_m)
+    v_errors = compute_errors(mojo_v, ref_v)
+    w_errors = compute_errors(mojo_w, ref_w)
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Test Case: N={N}, t={t}")
+        print(f"{'='*60}")
+        print(f"Execution Time - Mojo: {mojo_time:.6f}s, NumPy: {numpy_time:.6f}s")
+        print(f"Speedup: {numpy_time/mojo_time:.2f}x")
+        print(f"\nErrors:")
+        print(f"  Momentum (m):")
+        print(f"    L2 relative: {m_errors['l2_rel']:.2e}")
+        print(f"    Max absolute: {m_errors['max_abs']:.2e}")
+        print(f"    Max relative: {m_errors['max_rel']:.2e}")
+        print(f"  Variance (v):")
+        print(f"    L2 relative: {v_errors['l2_rel']:.2e}")
+        print(f"    Max absolute: {v_errors['max_abs']:.2e}")
+        print(f"    Max relative: {v_errors['max_rel']:.2e}")
+        print(f"  Weights (w):")
+        print(f"    L2 relative: {w_errors['l2_rel']:.2e}")
+        print(f"    Max absolute: {w_errors['max_abs']:.2e}")
+        print(f"    Max relative: {w_errors['max_rel']:.2e}")
+
+    return {
+        "N": N,
+        "t": t,
+        "mojo_time": mojo_time,
+        "numpy_time": numpy_time,
+        "m_l2_rel": m_errors["l2_rel"],
+        "v_l2_rel": v_errors["l2_rel"],
+        "w_l2_rel": w_errors["l2_rel"],
+        "max_error": max(m_errors["max_rel"], v_errors["max_rel"], w_errors["max_rel"]),
+    }
+
+
+def run_multi_step_test(
+    N: int,
+    num_steps: int,
+    session: InferenceSession,
+    device: Device,
+    rng: np.random.Generator,
+    hyperparams: Dict[str, float],
+) -> None:
+    """Test multiple optimization steps to verify state propagation"""
+    print(f"\n{'='*60}")
+    print(f"Multi-Step Test: N={N}, steps={num_steps}")
+    print(f"{'='*60}")
+
+    # Initialize states
+    m_mojo = rng.standard_normal(N, dtype=np.float32) * 0.1
+    v_mojo = rng.standard_normal(N, dtype=np.float32) ** 2 * 0.1
+    w_mojo = rng.standard_normal(N, dtype=np.float32)
+
+    m_numpy = m_mojo.copy()
+    v_numpy = v_mojo.copy()
+    w_numpy = w_mojo.copy()
+
+    # Run multiple steps
+    for t in tqdm(range(1, num_steps + 1)):
+        grad = rng.standard_normal(N, dtype=np.float32)
+
+        # Mojo step
+        m_tensor, v_tensor, w_tensor = adamw_step(
+            m_mojo,
+            v_mojo,
+            w_mojo,
+            grad,
+            step_t=t,
+            **hyperparams,
+            session=session,
+            device=device,
+        )
+        m_mojo = m_tensor.to_numpy()
+        v_mojo = v_tensor.to_numpy()
+        w_mojo = w_tensor.to_numpy()
+
+        # NumPy step
+        m_numpy, v_numpy, w_numpy = adamw_numpy_reference(
+            m_numpy, v_numpy, w_numpy, grad, t, **hyperparams
+        )
+
+    # Check final errors
+    final_w_error = np.linalg.norm(w_mojo - w_numpy) / np.linalg.norm(w_numpy)
+    print(
+        f"Final weight L2 relative error after {num_steps} steps: {final_w_error:.2e}"
+    )
+
+    # Verify weights are actually changing
+    initial_w = rng.standard_normal(N, dtype=np.float32)
+    weight_change = np.linalg.norm(w_numpy - initial_w) / np.linalg.norm(initial_w)
+    print(f"Total weight change magnitude: {weight_change:.2%}")
+
+
+# ---------------------------------------------------------------------------
+# Main test suite
+# ---------------------------------------------------------------------------
+def main():
+    # Setup device and session
     device = CPU() if accelerator_count() == 0 else Accelerator()
     session = InferenceSession(devices=[device])
-    print(device)
+    print(f"Running tests on: {device}")
 
-    N = 4096  # number of parameters
-    rng = np.random.default_rng(0)
+    # Test hyperparameters
+    hyperparams = {
+        "lr": 1e-3,
+        "beta1": 0.9,
+        "beta2": 0.999,
+        "eps": 1e-8,
+        "weight_decay": 1e-2,
+    }
 
-    prev_m_np = rng.standard_normal(N, dtype=np.float32) * 0.1
-    prev_v_np = rng.standard_normal(N, dtype=np.float32) ** 2 * 0.1
-    prev_w_np = rng.standard_normal(N, dtype=np.float32)
-    grad_np = rng.standard_normal(N, dtype=np.float32)
+    # Test configurations
+    test_sizes = [32, 256, 1024, 4096, 16384, 65536]  # Various problem sizes
+    test_timesteps = [1, 10, 100, 1000]  # Test bias correction at different t
 
-    # Hyper‑parameters (must match defaults in adamw.mojo)
-    lr, beta1, beta2, eps, wd = 1e-3, 0.9, 0.999, 1e-8, 1e-2
-    t = 1
+    # Random seed for reproducibility
+    rng = np.random.default_rng(42)
 
-    # ---- Mojo ----------------------------------------------------------------
-    # import ipdb; ipdb.set_trace()  # fmt: skip
+    # Run comprehensive tests
+    all_results = []
+    tolerance = 1e-5  # Relative error tolerance
+
+    print("\n" + "=" * 60)
+    print("ADAMW KERNEL COMPREHENSIVE TEST SUITE")
+    print("=" * 60)
+    print(f"Hyperparameters: {hyperparams}")
+    print(f"Error tolerance: {tolerance}")
+
+    # Test 1: Various sizes and timesteps
+    for N in test_sizes:
+        for t in test_timesteps:
+            if N > 16384 and t > 100:  # Skip very large tests
+                continue
+
+            result = run_single_test(
+                N, t, session, device, rng, hyperparams, verbose=False
+            )
+            all_results.append(result)
+
+            # Check if test passed
+            if result["max_error"] > tolerance:
+                print(f"❌ FAILED: N={N}, t={t} - Max error: {result['max_error']:.2e}")
+            else:
+                print(f"✅ PASSED: N={N}, t={t} - Max error: {result['max_error']:.2e}")
+
+    # Test 2: Multi-step convergence tests
+    print("\n" + "=" * 60)
+    print("MULTI-STEP CONVERGENCE TESTS")
+    print("=" * 60)
+
+    for N in [256, 4096]:
+        run_multi_step_test(N, 50, session, device, rng, hyperparams)
+
+    # Test 3: Edge cases
+    print("\n" + "=" * 60)
+    print("EDGE CASE TESTS")
+    print("=" * 60)
+
+    # Test with zero gradients
+    print("\nTesting with zero gradients...")
+    N = 128
+    prev_m = rng.standard_normal(N, dtype=np.float32) * 0.1
+    prev_v = rng.standard_normal(N, dtype=np.float32) ** 2 * 0.1
+    prev_w = rng.standard_normal(N, dtype=np.float32)
+    zero_grad = np.zeros(N, dtype=np.float32)
+
     mojo_m, mojo_v, mojo_w = adamw_step(
-        prev_m_np,
-        prev_v_np,
-        prev_w_np,
-        grad_np,
-        step_t=t,
-        lr=lr,
-        beta1=beta1,
-        beta2=beta2,
-        eps=eps,
-        weight_decay=wd,
+        prev_m,
+        prev_v,
+        prev_w,
+        zero_grad,
+        1,
+        **hyperparams,
         session=session,
         device=device,
     )
 
-    # ---- NumPy reference ------------------------------------------------------
-    m_ref = beta1 * prev_m_np + (1.0 - beta1) * grad_np
-    v_ref = beta2 * prev_v_np + (1.0 - beta2) * grad_np**2
-
-    # bias‑corrected step size as coded in adamw.mojo
-    alpha_t = lr * np.sqrt(1.0 - beta2**t) / (1.0 - beta1**t)
-    update = alpha_t * m_ref / (np.sqrt(v_ref) + eps) + lr * wd * prev_w_np
-    w_ref = prev_w_np - update
-
-    # ---- Error metrics --------------------------------------------------------
-    l2 = lambda x: np.linalg.norm(x.ravel())
-    m_err = l2(mojo_m.to_numpy() - m_ref) / l2(m_ref)
-    v_err = l2(mojo_v.to_numpy() - v_ref) / l2(v_ref)
-    w_err = l2(mojo_w.to_numpy() - w_ref) / l2(w_ref)
-
-    max_abs_rel = lambda a, b: np.max(np.abs(a - b) / np.maximum(np.abs(b), 1e-12))
-
-    print(
-        f"m   rel‑err l2: {m_err:e},  max abs rel‑err: {max_abs_rel(mojo_m.to_numpy(), m_ref):e}"
+    # With zero gradients, only weight decay should affect weights
+    expected_w = prev_w * (1 - hyperparams["lr"] * hyperparams["weight_decay"])
+    w_error = np.linalg.norm(mojo_w.to_numpy() - expected_w) / np.linalg.norm(
+        expected_w
     )
-    print(
-        f"v   rel‑err l2: {v_err:e},  max abs rel‑err: {max_abs_rel(mojo_v.to_numpy(), v_ref):e}"
+    print(f"Zero gradient test - Weight error: {w_error:.2e}")
+
+    # Test with very large timestep (extreme bias correction)
+    print("\nTesting with large timestep (t=10000)...")
+    result = run_single_test(
+        256, 10000, session, device, rng, hyperparams, verbose=True
     )
-    print(
-        f"w   rel‑err l2: {w_err:e},  max abs rel‑err: {max_abs_rel(mojo_w.to_numpy(), w_ref):e}"
-    )
+
+    # Summary statistics
+    print("\n" + "=" * 60)
+    print("TEST SUMMARY")
+    print("=" * 60)
+
+    passed = sum(1 for r in all_results if r["max_error"] <= tolerance)
+    total = len(all_results)
+    print(f"Tests passed: {passed}/{total} ({passed/total*100:.1f}%)")
+
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED! 🎉")
+    else:
+        print(f"\n⚠️  {total - passed} tests failed")
+
+    # Performance summary
+    print("\nPerformance Summary:")
+    for size in test_sizes[:4]:  # Show first 4 sizes
+        size_results = [r for r in all_results if r["N"] == size]
+        if size_results:
+            avg_speedup = np.mean(
+                [r["numpy_time"] / r["mojo_time"] for r in size_results]
+            )
+            print(f"  N={size}: Average speedup {avg_speedup:.2f}x")
+
+
+if __name__ == "__main__":
+    main()
