@@ -78,6 +78,7 @@ def adamw_step(
         graph.output(next_m_val, next_v_val, next_w_val)
 
     # 3) Compile & run
+    # import ipdb; ipdb.set_trace() # fmt: skip
     model = session.load(graph)
     next_m, next_v, next_w = model.execute(pm_t, pv_t, pw_t, dw_t, step_t_t)
 
@@ -93,7 +94,7 @@ if __name__ == "__main__":
     session = InferenceSession(devices=[device])
     print(device)
 
-    N = 32  # number of parameters
+    N = 4096  # number of parameters
     rng = np.random.default_rng(0)
 
     prev_m_np = rng.standard_normal(N, dtype=np.float32) * 0.1
@@ -103,9 +104,10 @@ if __name__ == "__main__":
 
     # Hyper‑parameters (must match defaults in adamw.mojo)
     lr, beta1, beta2, eps, wd = 1e-3, 0.9, 0.999, 1e-8, 1e-2
-    t = 1  # first update step
+    t = 1
 
     # ---- Mojo ----------------------------------------------------------------
+    # import ipdb; ipdb.set_trace()  # fmt: skip
     mojo_m, mojo_v, mojo_w = adamw_step(
         prev_m_np,
         prev_v_np,

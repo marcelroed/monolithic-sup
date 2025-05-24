@@ -58,7 +58,7 @@ fn adamw_step_kernel_gpu[
     t: LayoutTensor[DType.int32, t_layout, MutableAnyOrigin],
 ):
     # Shapes
-    var N = prev_m.dim[0]()
+    var N = prev_m.shape[0]()
     var idx = block_dim.x * block_idx.x + thread_idx.x
     if idx >= N:
         return
@@ -116,7 +116,7 @@ struct AdamW:
             t_layout = t.to_layout_tensor()
 
             alias blockX = 256
-            N = prev_m_layout.dim[0]()
+            alias N = prev_m_layout.shape[0]()
             gpu_ctx.enqueue_function[
                 adamw_step_kernel_gpu[
                     prev_m.type,
