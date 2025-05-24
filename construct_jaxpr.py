@@ -91,7 +91,7 @@ def _softmax_jvp(axis, primals, tangents):
 
 mse_value_and_grad = jax.value_and_grad(mse_fun)
 
-def show_function(fun, *args, save_as: str = None):
+def show_function(fun, *args, save_as: str | None = None):
     jitted = jax.jit(fun)
     traced = jitted.trace(*args)
     lowered = traced.lower()
@@ -104,6 +104,7 @@ def show_function(fun, *args, save_as: str = None):
         for i, hlo_module in enumerate(compiled._executable.xla_executable.hlo_modules()):
             for j, computation in enumerate(hlo_module.computations()):
                 computation.render_html(f'{save_as}_{i}_{j}')
+
 
 
 if __name__ == "__main__":
