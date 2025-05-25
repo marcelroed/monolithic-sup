@@ -117,7 +117,7 @@ fn scatter_add_kernel_gpu[
     var idx = index[b * E + e]
     var out_offset = (b * N + idx) * K + k
 
-    atomic_add[dtype]("TODO: What should go here?", src[tid])
+    atomic_add[dtype]("TODO: What should go here?", src[tid]) # reference: modular/mojo/stdlib/stdlib/gpu/intrinsics.mojo
     # Atomic.fetch_add(out + out_offset, src[tid]) # TODO: No works:((
     # alias swizzle_block = src_layout.is_half_float() and b_type.is_half_float() and is_nvidia_gpu()
     # var block_idx_swizzle = block_swizzle(
