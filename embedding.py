@@ -11,27 +11,6 @@ CTX_LEN = 10
 
 embedding_table = torch.randn(VOCAB_SIZE, EMBED_DIM)
 
-#  def embedding_forward(input_ids, embedding_table):
-#      embeddings = torch.gather(
-#          embedding_table.unsqueeze(0).expand(input_ids.shape[0], -1, -1),
-#          dim=1,
-#          index=input_ids.unsqueeze(-1).expand(-1, -1, embedding_table.shape[1])
-#      )
-#      return embeddings
-
-#  def embedding_forward(input_ids, embedding_table):
-#      batch_size, seq_len = input_ids.shape
-#      vocab_size, embed_dim = embedding_table.shape
-#      token_indices = torch.repeat_interleave(input_ids, embed_dim)
-#      dim_indices = torch.arange(embed_dim, device=input_ids.device).repeat(batch_size*seq_len)
-#      flat_embeddings = torch.gather(
-#          embedding_table.flatten(),
-#          dim=0,
-#          index=dim_indices + token_indices * embed_dim
-#      )
-#      embeddings = flat_embeddings.view(batch_size, seq_len, embed_dim)
-#      return embeddings
-
 def embedding_forward(input_ids, embedding_table):
     batch_size, seq_len = input_ids.shape
     vocab_size, embed_dim = embedding_table.shape
