@@ -48,67 +48,94 @@ def relu_bwd(dy, grad_mask, constant_zero):
 
 from max.graph.value import TensorValue
 
+def split_heads(x: TensorValue, n_heads: int) -> TensorValue:
+    assert len(x.shape) == 3, f"Expected 3D tensor, got {x.shape}"
+    assert int(x.shape[-1]) % n_heads == 0, f"Last dimension {x.shape[-1]} must be divisible by n_heads {n_heads}"
+
+    batch_dim = x.shape[0]
+    seq_len = x.shape[1]
+    head_dim = x.shape[2] // n_heads
+    # Reshape to (batch, n_heads, seq_len, head_dim)
+    x = x.reshape((batch_dim, seq_len, n_heads, head_dim))
+    x = ops.transpose(x, 1, 2)  # Move n_heads to second dimension
+    x = x.reshape((batch_dim * n_heads, seq_len, head_dim))
+    return x
+
+
+def join_heads(x: TensorValue, n_heads: int) -> TensorValue:
+    assert len(x.shape) == 3, f"Expected 3D tensor, got {x.shape}"
+    assert int(x.shape[0]) % n_heads == 0, f"First dimension {x.shape[0]} must be divisible by n_heads {n_heads}"
+
+    batch_size = x.shape[0] // n_heads
+    seq_len = x.shape[1]
+    head_dim = x.shape[2]
+    # Reshape to (batch, n_heads, seq_len, head_dim)
+    x = x.reshape((batch_size, n_heads, seq_len, head_dim))
+    x = ops.transpose(x, 1, 2)  # Move seq_len to second dimension
+    x = x.reshape((batch_size, seq_len, n_heads * head_dim))
+    return x
+
+
 @dataclass
 class Attention:
+    neginf: TensorValue
+    constant_zero: TensorValue
+    attn_mask: TensorValue
+    n_heads: int
+    head_dim: int
     p: TensorValue | None = None
     q: TensorValue | None = None
     k: TensorValue | None = None
     v: TensorValue | None = None
-    attn_mask: TensorValue | None = None
-    head_dim: int = None
-
-
 
     def __call__(
         self,
         Q: TensorValue,
         K: TensorValue,
         V: TensorValue,
-        attn_mask: TensorValue,
-        n_heads: int,
-        head_dim: int,
-        neginf: TensorValue,
-        constant_zero: TensorValue,
     ) -> TensorValue:
-        self.q = Q; self.k = K; self.v = V
-        self.n_heads = n_heads
-        self.head_dim = head_dim
-        self.neginf = neginf
-        self.constant_zero = constant_zero
         # Broadcast the attention mask across heads.
         # Do so in the graph so that the broadcast can be fused into downstream
         # ops.
-        batch, _, seq_len, post_seq_len = attn_mask.shape
-        attn_mask = attn_mask.broadcast_to(
+        batch, seq_len, d = Q.shape
+
+        Q, K, V = (
+            split_heads(x, self.n_heads) for x in (Q, K, V)
+        )
+
+        self.q = Q; self.k = K; self.v = V
+
+        attn_mask = self.attn_mask.broadcast_to(
             (
-                batch,
-                n_heads,
+                batch * self.n_heads,
                 seq_len,
-                post_seq_len,
+                seq_len,
             )
         )
         self.attn_mask = attn_mask
 
-        scale = math.sqrt(1.0 / head_dim)
+        scale = math.sqrt(1.0 / self.head_dim)
         scores = Q @ ops.transpose(K, -2, -1)
         # Note, the graph compiler currently requires the order of operands
         # to be `scores * scale` in order to pattern match the fused attention
         # operator.
         # scores = ops.softmax(scores * scale + attn_mask)
-        scores = ops.select(attn_mask, scores)
+        scores = ops.select(self.attn_mask, scores, self.neginf)
         scores = ops.softmax(scores * scale)
+
 
         self.p = scores
 
-        return scores @ V
+        return join_heads(scores @ V, n_heads=self.n_heads)
 
     def backward(
         self,
         dO: TensorValue,
         lr: TensorValue,
     ):
-        dV = ops.matmul(ops.transpose(self.p, 2, 3), dO)
-        dP = ops.matmul(dO, ops.transpose(self.v, -1, -2))
+        dO = split_heads(dO, self.n_heads)
+        dV = ops.matmul(ops.transpose(self.p, -2, -1), dO)
+        dP = ops.matmul(dO, ops.transpose(self.v, -2, -1))
         
         dS = ops.add(
             ops.mul(ops.broadcast_to(-ops.sum(ops.mul(dP, self.p), axis=-1), self.p.shape), self.p),
@@ -119,7 +146,7 @@ class Attention:
 
         dQ = ops.matmul(dS, self.k) * (1.0 / math.sqrt(self.head_dim))
         dK = ops.matmul(ops.transpose(dS, -1, -2), self.q) * (1.0 / math.sqrt(self.head_dim))
-        return dQ, dK, dV
+        return tuple(map(lambda x: join_heads(x, n_heads=self.n_heads), (dQ, dK, dV)))
 
 
 
@@ -131,12 +158,30 @@ class Linear:
     x_activation: TensorValue | None = None
 
     def __call__(self, x: TensorValue) -> TensorValue:
+        if len(x.shape) > 2:
+            batch_dims = x.shape[:-1]
+            x = x.reshape((-1, x.shape[-1]))
+        else:
+            batch_dims = None
+
         self.x_activation = x
-        return ops.matmul(x, ops.transpose(self.weight))
+
+        y = ops.matmul(x, ops.transpose(self.weight, -2, -1))
+
+        if batch_dims is not None:
+            y = y.reshape((*batch_dims, y.shape[-1]))
+        return y
+
     
     def backward(self, dy: TensorValue, lr: TensorValue) -> tuple[TensorValue, TensorValue]:
+        if len(dy.shape) > 2:
+            batch_dims = dy.shape[:-1]
+            dy = dy.reshape((-1, dy.shape[-1]))
+        else:
+            batch_dims = None
+        
         dw = ops.matmul(
-            ops.transpose(dy, 0, 1),
+            ops.transpose(dy, -2, -1),
             self.x_activation,
         )
         dx = ops.matmul(
@@ -146,7 +191,10 @@ class Linear:
         w_new = update_weight(self.weight, dw, lr)
         self.weight = w_new
 
-        return dx
+        if batch_dims is not None:
+            dx = dx.reshape((*batch_dims, dx.shape[-1]))
+
+        return dx, w_new
 
 @dataclass
 class SelfAttention:
@@ -155,22 +203,34 @@ class SelfAttention:
     Wv: Linear
     Wo: Linear
     attn: Attention
+    def __init__(self, wq, wk, wv, wo, neginf, constant_zero, attn_mask, n_heads, head_dim):
+        self.attn = Attention(
+            neginf=neginf, constant_zero=constant_zero, 
+            attn_mask=attn_mask, n_heads=n_heads, head_dim=head_dim
+        )
+        self.Wq = Linear(wq)
+        self.Wk = Linear(wk)
+        self.Wv = Linear(wv)
+        self.Wo = Linear(wo)
 
-    def __call__(self, x, attn_mask, n_heads, head_dim, neginf, constant_zero):
+    def __call__(self, x):
         q = self.Wq(x)
         k = self.Wk(x)
         v = self.Wv(x)
 
-        o = self.attn(q, k, v, attn_mask, n_heads, head_dim, neginf, constant_zero,)
+        o = self.attn(q, k, v)
         o = self.Wo(o)
 
         return o
     
     def backward(self, do, lr):
-        do = self.Wo.backward(do, lr)
-        dq, dk, dv = self.attn.backward(do, lr)
-        dx = ops.add(ops.add(self.Wq.backward(dq, lr), self.Wk.backward(dk, lr)), self.Wv.backward(dv, lr))
-        return dx
+        do, Wo_new = self.Wo.backward(do, lr)
+        dQ, dK, dV = self.attn.backward(do, lr)
+        dx1, Wq_new = self.Wq.backward(dQ, lr)
+        dx2, Wk_new = self.Wk.backward(dK, lr)
+        dx3, Wv_new = self.Wv.backward(dV, lr)
+        dx = ops.add(ops.add(dx1, dx2), dx3)
+        return dx, Wq_new, Wk_new, Wv_new, Wo_new
     
 
 
@@ -207,6 +267,11 @@ def self_attn_fwd(x, wq, wk, wv, wo, scale, attn_mask):
 
 
 def cross_entropy_fwdbwd(logits, target):
+    if len(logits.shape) != 2:
+        batch_shape = logits.shape[:-1]
+        logits = logits.reshape((-1, logits.shape[-1]))
+    else:
+        batch_shape = None
     assert len(logits.shape) == 2, f'Expected 2d logits, got {logits.shape}'
     assert len(target.shape) == 1, f'Expected 1d targets, got {target.shape}'
     loss_val, grad_val = ops.custom(
@@ -228,6 +293,10 @@ def cross_entropy_fwdbwd(logits, target):
         ],
         # parameters={"algorithm": algorithm},  # if you want to select variants
     )
+
+    if batch_shape is not None:
+        grad_val = grad_val.reshape((*batch_shape, grad_val.shape[-1]))
+
     return loss_val, grad_val
 
 
@@ -244,8 +313,8 @@ def train_loop(
     # dout_tensor = Tensor.from_numpy(x_points).to(device)
     # x_activation_tensor = Tensor.from_numpy(y_points).to(device)
     # weight_tensor = Tensor.from_numpy(weight).to(device)
-    B, D = 64, 128
-    V = 32
+    B, D = 1, 2048
+    V = 64
     T = 256
     input_embedding_tensor = Tensor.from_numpy(np.random.normal(size=(B, T, D)).astype(np.float32)).to(device)
     weight_tensor = Tensor.from_numpy(np.random.normal(size=(V, D)).astype(np.float32) * 0.02).to(device)
@@ -254,6 +323,11 @@ def train_loop(
 
     qi = np.arange(T)[:, None]
     ki = np.arange(T)[None, :]
+
+    Wq_tensor, Wk_tensor, Wv_tensor, Wo_tensor = (
+        Tensor.from_numpy(np.random.normal(size=(D, D)).astype(np.float32) * 0.02).to(device)
+        for _ in range(4)
+    )
 
     attn_mask_tensor = Tensor.from_numpy(qi >= ki).to(device)
 
@@ -273,14 +347,34 @@ def train_loop(
                 shape=weight_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
+            TensorType(  # W_q
+                dtype,
+                shape=Wq_tensor.shape,
+                device=DeviceRef.from_device(device),
+            ),
+            TensorType(  # W_k
+                dtype,
+                shape=Wk_tensor.shape,
+                device=DeviceRef.from_device(device),
+            ),
+            TensorType(  # W_v
+                dtype,
+                shape=Wv_tensor.shape,
+                device=DeviceRef.from_device(device),
+            ),
+            TensorType(  # W_o
+                dtype,
+                shape=Wo_tensor.shape,
+                device=DeviceRef.from_device(device),
+            ),
             TensorType(  # target
                 DType.int32,
-                shape=(B, T),
+                shape=target_tensor.shape,
                 device=DeviceRef.from_device(device),
             ),
             TensorType(  # attn_mask
                 DType.bool,
-                shape=(T, T),
+                shape=attn_mask_tensor.shape,
                 device=DeviceRef.from_device(device),
             )
         ],
@@ -288,32 +382,43 @@ def train_loop(
     ) as graph:
         # Take in the two inputs to the graph.
         # dout_tensor_value, x_activation_tensor_value, weight_tensor_value = graph.inputs
-        input_embedding, weight, target, attn_mask = graph.inputs
+        input_embedding, weight, wq, wk, wv, wo, target, attn_mask = graph.inputs
         lr = ops.constant(learning_rate, weight_tensor.dtype, weight.tensor.device)
         scale = ops.constant(1.0 / np.sqrt(D), weight_tensor.dtype, weight.tensor.device)
         neginf = ops.constant(-1e9, weight_tensor.dtype, weight.tensor.device)
 
-        attn_mask = ops.select(attn_mask, 0, neginf)
+        # attn_mask = ops.select(attn_mask, 0, neginf)
 
-        logits = linear_fwd(input_embedding, weight).reshape((B * T, V))
+
+        self_attn = SelfAttention(
+            wq, wk, wv, wo, neginf=neginf, constant_zero=ops.constant(0.0, dtype, weight.tensor.device),
+            attn_mask=attn_mask,
+            n_heads=4, head_dim=D // 4,
+        )
+        a1 = self_attn(input_embedding)
+
+        linear1 = Linear(weight)
+        # logits = linear_fwd(input_embedding, weight)
+        logits = linear1(a1)
 
         loss, dlogits = cross_entropy_fwdbwd(
             logits, target.reshape((B * T,))
         )
-        dlogits = dlogits.reshape((B, T, V))
+        # dlogits = dlogits.reshape((B, T, V))
         dlogits = ops.mul(dlogits, ops.constant(1.0 / B, weight_tensor.dtype, weight.tensor.device))
 
         # B, D = 64, 128
         # V = 32
         # T = 256
-        
-        _dx, new_weight = linear_bwd(
-            input_embedding, weight, dlogits, lr
-        )
 
-        _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
+        # _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
+        dx, new_weight = linear1.backward(dlogits, lr)
 
-        graph.output(loss, new_weight)
+        dx, *new_attention_weights = self_attn.backward(dx, lr)
+
+        # _dx, new_weight = linear_bwd(input_embedding, weight, dlogits, lr)
+
+        graph.output(loss, new_weight, *new_attention_weights)
         # The matrix multiplication custom operation takes in two matrices and
         # produces a result, with the specific algorithm that is used chosen
         # via compile-time parameterization.
@@ -358,9 +463,10 @@ def train_loop(
     pbar = tqdm()
     step = 0
     # wandb.init(project="mojo")
+    attention_weights = (Wq_tensor, Wk_tensor, Wv_tensor, Wo_tensor)
     while True:
-        loss, weight_tensor = model.execute(
-            input_embedding_tensor, weight_tensor, target_tensor, attn_mask_tensor,
+        loss, weight_tensor, *attention_weights = model.execute(
+            input_embedding_tensor, weight_tensor, *attention_weights, target_tensor, attn_mask_tensor,
         )
         loss_to_log = loss.to(CPU()).to_numpy().mean()
         pbar.set_postfix({"loss": loss_to_log})
